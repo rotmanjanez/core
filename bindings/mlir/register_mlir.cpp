@@ -14,6 +14,7 @@
 #include "mlir/Compiler/QDMIAdapter.h"
 #include "mlir/Compiler/Target.h"
 #include "mlir/Dialect/MQT/IR/MQTDialect.h"
+#include "mlir/Dialect/QCO/IR/QCODialect.h"
 #include "mlir/Dialect/QCO/Utils/DDFunctionality.h"
 #include "qdmi/Client.hpp"
 #include "qdmi/driver/SessionConfig.hpp"
@@ -22,6 +23,8 @@
 #include <llvm/Support/Error.h>
 #include <llvm/Support/raw_ostream.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
+#include <mlir/IR/BuiltinAttributes.h>
+#include <mlir/IR/BuiltinTypes.h>
 #include <mlir/IR/Diagnostics.h>
 #include <mlir/IR/MLIRContext.h>
 #include <mlir/Support/LogicalResult.h>
@@ -39,6 +42,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <optional>
 #include <random>
@@ -48,6 +52,7 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace mqt {
@@ -137,6 +142,63 @@ entryFunc(const mlir::QCOProgram& program) {
     throw nb::value_error("QCO program has no func.func entry point");
   }
   return func;
+}
+
+using QCODDBindingValue = std::variant<bool, int64_t, double>;
+using QCODDBindingMap = std::map<size_t, QCODDBindingValue>;
+
+[[nodiscard]] static mlir::qco::DDBindings
+makeQCODDBindings(mlir::func::FuncOp func,
+                  const QCODDBindingMap& pythonBindings) {
+  mlir::qco::DDBindings bindings;
+  for (const auto& [index, binding] : pythonBindings) {
+    if (index >= func.getNumArguments()) {
+      throw nb::value_error("QCO DD binding argument index is out of range");
+    }
+
+    mlir::Value argument = func.getArgument(static_cast<unsigned>(index));
+    const mlir::Type type = argument.getType();
+    mlir::Attribute attribute;
+    if (type.isInteger(1)) {
+      if (const auto* value = std::get_if<bool>(&binding)) {
+        attribute = mlir::BoolAttr::get(func.getContext(), *value);
+      }
+    } else if (mlir::isa<mlir::IndexType, mlir::IntegerType>(type)) {
+      if (const auto* value = std::get_if<int64_t>(&binding)) {
+        attribute = mlir::IntegerAttr::get(type, *value);
+      }
+    } else if (const auto floatType = mlir::dyn_cast<mlir::FloatType>(type)) {
+      if (const auto* value = std::get_if<double>(&binding)) {
+        attribute = mlir::FloatAttr::get(floatType, *value);
+      }
+    } else if (const auto tensorType =
+                   mlir::dyn_cast<mlir::RankedTensorType>(type);
+               tensorType && tensorType.getRank() == 1 &&
+               tensorType.isDynamicDim(0) &&
+               mlir::isa<mlir::qco::QubitType>(tensorType.getElementType())) {
+      if (const auto* value = std::get_if<int64_t>(&binding);
+          value != nullptr && *value >= 0) {
+        attribute = mlir::IntegerAttr::get(
+            mlir::IndexType::get(func.getContext()), *value);
+      }
+    }
+
+    if (!attribute) {
+      throw nb::value_error(
+          "QCO DD binding value does not match the entry argument type");
+    }
+    bindings[argument] = attribute;
+  }
+  return bindings;
+}
+
+static void requireLiveReference(const dd::VectorDD& state,
+                                 dd::Package& ddPackage) {
+  if (dd::VectorDD::trackingRequired(state) &&
+      !ddPackage.getRootSet<dd::vNode>().contains(state)) {
+    throw nb::value_error(
+        "initial_state must have a live reference in dd_package");
+  }
 }
 
 [[nodiscard]] static std::mt19937_64 makeRng(const uint64_t seed) {
@@ -993,14 +1055,18 @@ LLVM bitcode.)pb");
 
   m.def(
       "build_functionality",
-      [](const mlir::QCOProgram& program, dd::Package& ddPackage) {
+      [](const mlir::QCOProgram& program, dd::Package& ddPackage,
+         const QCODDBindingMap& pythonBindings) {
         auto func = entryFunc(program);
+        const auto bindings = makeQCODDBindings(func, pythonBindings);
         return takeFailureOr(
             func.getContext(),
-            "cannot build DD functionality for this QCO program",
-            [&] { return mlir::qco::buildFunctionality(func, ddPackage); });
+            "cannot build DD functionality for this QCO program", [&] {
+              return mlir::qco::buildFunctionality(func, ddPackage, bindings);
+            });
       },
-      "program"_a, "dd_package"_a,
+      "program"_a, "dd_package"_a, nb::kw_only(),
+      "bindings"_a = QCODDBindingMap{},
       // Keep the DD package alive while the returned matrix DD is alive
       // (arg index 2; free-function equivalent of method keep_alive<0, 1>).
       nb::keep_alive<0, 2>(),
@@ -1009,6 +1075,7 @@ LLVM bitcode.)pb");
 Args:
     program: A QCO program whose entry ``func.func`` is used to build a matrix DD.
     dd_package: DD package with enough qubits for the program.
+    bindings: Concrete entry-argument values keyed by zero-based argument index.
 
 Returns:
     Matrix DD of the program functionality.
@@ -1019,20 +1086,20 @@ Raises:
   m.def(
       "simulate",
       [](const mlir::QCOProgram& program, const dd::VectorDD& initialState,
-         dd::Package& ddPackage, const uint64_t seed) {
-        if (dd::VectorDD::trackingRequired(initialState) &&
-            !ddPackage.getRootSet<dd::vNode>().contains(initialState)) {
-          throw nb::value_error(
-              "initial_state must have a live reference in dd_package");
-        }
+         dd::Package& ddPackage, const uint64_t seed,
+         const QCODDBindingMap& pythonBindings) {
+        requireLiveReference(initialState, ddPackage);
         auto func = entryFunc(program);
+        const auto bindings = makeQCODDBindings(func, pythonBindings);
         auto rng = makeRng(seed);
         return takeFailureOr(
             func.getContext(), "cannot simulate this QCO program", [&] {
-              return mlir::qco::simulate(func, initialState, ddPackage, rng);
+              return mlir::qco::simulate(func, initialState, ddPackage, rng,
+                                         bindings);
             });
       },
       "program"_a, "initial_state"_a, "dd_package"_a, "seed"_a = 0U,
+      nb::kw_only(), "bindings"_a = QCODDBindingMap{},
       // Keep the DD package alive while the returned vector DD is alive.
       nb::keep_alive<0, 3>(),
       R"pb(Simulate a QCO program on a DD state.
@@ -1045,6 +1112,7 @@ Args:
     dd_package: DD package with enough qubits for the program.
     seed: RNG seed. ``0`` (default) selects nondeterministic seeding. Any other
         value produces reproducible measurement and reset results.
+    bindings: Concrete entry-argument values keyed by zero-based argument index.
 
 Returns:
     Output state DD.
@@ -1056,14 +1124,25 @@ Raises:
   m.def(
       "sample",
       [](const mlir::QCOProgram& program, dd::Package& ddPackage,
-         const size_t shots, const uint64_t seed) {
+         const size_t shots, const uint64_t seed,
+         const std::optional<dd::VectorDD>& initialState,
+         const QCODDBindingMap& pythonBindings) {
         auto func = entryFunc(program);
+        const auto bindings = makeQCODDBindings(func, pythonBindings);
         auto rng = makeRng(seed);
         return takeFailureOr(
-            func.getContext(), "cannot sample this QCO program",
-            [&] { return mlir::qco::sample(func, ddPackage, shots, rng); });
+            func.getContext(), "cannot sample this QCO program", [&] {
+              if (initialState) {
+                requireLiveReference(*initialState, ddPackage);
+                return mlir::qco::sample(func, *initialState, ddPackage, shots,
+                                         rng, bindings);
+              }
+              return mlir::qco::sample(func, ddPackage, shots, rng, bindings);
+            });
       },
       "program"_a, "dd_package"_a, "shots"_a = 1024U, "seed"_a = 0U,
+      nb::kw_only(), "initial_state"_a = nb::none(),
+      "bindings"_a = QCODDBindingMap{},
       R"pb(Sample the declared outputs of a QCO program.
 
 Args:
@@ -1072,13 +1151,17 @@ Args:
     shots: Number of shots (default 1024).
     seed: RNG seed. ``0`` (default) selects nondeterministic seeding. Any other
         value produces reproducible results.
+    initial_state: Optional input state with a live reference in ``dd_package``.
+        A valid input reference is consumed.
+    bindings: Concrete entry-argument values keyed by zero-based argument index.
 
 Returns:
     Histogram of returned CBit registers in return order, each MSB first. If
     no CBit result exists, final ``measureAll`` bitstrings instead.
 
 Raises:
-    ValueError: When the program is unsupported for sampling.)pb");
+    ValueError: When ``initial_state`` has no live reference in ``dd_package``
+        or the program is unsupported for sampling.)pb");
 
   m.def("compile_program", &compileProgram, "program"_a, nb::kw_only(),
         "output"_a = mlir::ProgramFormat::QC, "inplace"_a = false,
