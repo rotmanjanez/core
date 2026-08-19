@@ -14,7 +14,17 @@ import numpy as np
 import pytest
 
 from mqt.core.dd import DDPackage
-from mqt.core.mlir import OutputFormat, QCOProgram, build_functionality, compile_program, sample, simulate
+from mqt.core.mlir import (
+    OutputFormat,
+    QCOProgram,
+    build_functionality,
+    compile_program,
+    make_density_matrix,
+    sample,
+    sample_density,
+    simulate,
+    simulate_density,
+)
 
 
 def _x_program() -> QCOProgram:
@@ -139,6 +149,8 @@ def test_dd_apis_reject_state_from_different_package_without_consuming_it() -> N
         simulate(program, zero, target_package, seed=7)
 
     with pytest.raises(ValueError, match=r"live reference in dd_package"):
+        make_density_matrix(zero, 1, target_package)
+    with pytest.raises(ValueError, match=r"live reference in dd_package"):
         sample(program, target_package, initial_state=zero)
 
     out = simulate(program, zero, source_package)
@@ -208,6 +220,16 @@ def test_compiler_to_sampler_outputs(source: str, num_qubits: int, expected: set
     assert set(counts) == expected
     assert sum(counts.values()) == shots
 
+    # Compiled OpenQASM programs allocate their qubits, so their initial
+    # quantum register is empty even though the package needs full capacity.
+    zero = package.zero_state(0)
+    density = make_density_matrix(zero, 0, package)
+    package.dec_ref_vec(zero)
+    density_counts = sample_density(program, density, package, shots=shots, seed=17)
+
+    assert set(density_counts) == expected
+    assert sum(density_counts.values()) == shots
+
 
 def test_symbolic_bindings_across_dd_apis() -> None:
     """All DD APIs accept concrete scalar and dynamic QTensor bindings."""
@@ -223,9 +245,22 @@ def test_symbolic_bindings_across_dd_apis() -> None:
     expected = package.computational_basis_state(2, [False, True])
     assert np.allclose(np.abs(out.get_vector()), np.abs(expected.get_vector()))
     package.dec_ref_vec(out)
+
+    zero = package.zero_state(2)
+    density = make_density_matrix(zero, 2, package)
+    package.dec_ref_vec(zero)
+    density_out = simulate_density(program, density, package, bindings=bindings)
+    expected_density = make_density_matrix(expected, 2, package)
+    assert np.allclose(density_out.get_matrix(2), expected_density.get_matrix(2))
+    package.dec_ref_mat(density_out)
+    package.dec_ref_mat(expected_density)
     package.dec_ref_vec(expected)
 
     assert sample(program, package, shots=8, seed=4, bindings=bindings) == {"10": 8}
+    zero = package.zero_state(2)
+    density = make_density_matrix(zero, 2, package)
+    package.dec_ref_vec(zero)
+    assert sample_density(program, density, package, shots=8, seed=4, bindings=bindings) == {"10": 8}
 
 
 @pytest.mark.parametrize(
@@ -252,3 +287,75 @@ def test_sample_from_supplied_initial_state() -> None:
 
     one = package.computational_basis_state(1, [True])
     assert sample(program, package, shots=8, seed=6, initial_state=one) == {"0": 8}
+
+
+def test_density_simulation_and_sampling() -> None:
+    """Construct, simulate, and sample pure-state density matrices."""
+    package = DDPackage(1)
+
+    zero = package.zero_state(1)
+    density = make_density_matrix(zero, 1, package)
+    package.dec_ref_vec(zero)
+    out = simulate_density(_x_program(), density, package)
+    assert np.allclose(out.get_matrix(1), np.asarray([[0.0, 0.0], [0.0, 1.0]]))
+    package.dec_ref_mat(out)
+
+    zero = package.zero_state(1)
+    density = make_density_matrix(zero, 1, package)
+    package.dec_ref_vec(zero)
+    out = simulate_density(_measure_program(), density, package)
+    assert np.allclose(out.get_matrix(1), np.asarray([[1.0, 0.0], [0.0, 0.0]]))
+    package.dec_ref_mat(out)
+
+    zero = package.zero_state(1)
+    density = make_density_matrix(zero, 1, package)
+    package.dec_ref_vec(zero)
+    assert sample_density(_x_program(), density, package, shots=16, seed=8) == {"1": 16}
+
+
+def test_make_density_matrix_rejects_invalid_input() -> None:
+    """Density construction requires a live state and sufficient capacity."""
+    package = DDPackage(1)
+    zero = package.zero_state(1)
+    with pytest.raises(ValueError, match=r"does not cover"):
+        make_density_matrix(zero, 0, package)
+    with pytest.raises(ValueError, match=r"exceeds the capacity"):
+        make_density_matrix(zero, 2, package)
+    density = make_density_matrix(zero, 1, package)
+    package.dec_ref_mat(density)
+    package.dec_ref_vec(zero)
+
+    unrooted = package.zero_state(1)
+    package.dec_ref_vec(unrooted)
+    with pytest.raises(ValueError, match=r"live reference in dd_package"):
+        make_density_matrix(unrooted, 1, package)
+
+
+def test_density_apis_reject_foreign_or_unrooted_state_without_consuming_it() -> None:
+    """Density execution checks matrix ownership before consuming a reference."""
+    program = _x_program()
+    source_package = DDPackage(1)
+    target_package = DDPackage(1)
+    zero = source_package.zero_state(1)
+    density = make_density_matrix(zero, 1, source_package)
+    source_package.dec_ref_vec(zero)
+
+    for call in (
+        lambda: simulate_density(program, density, target_package),
+        lambda: simulate_density(program, density, target_package, seed=7),
+        lambda: sample_density(program, density, target_package, shots=1, seed=7),
+    ):
+        with pytest.raises(ValueError, match=r"live reference in dd_package"):
+            call()
+
+    out = simulate_density(program, density, source_package)
+    source_package.dec_ref_mat(out)
+
+    zero = source_package.zero_state(1)
+    unrooted = make_density_matrix(zero, 1, source_package)
+    source_package.dec_ref_vec(zero)
+    source_package.dec_ref_mat(unrooted)
+    with pytest.raises(ValueError, match=r"live reference in dd_package"):
+        simulate_density(program, unrooted, source_package)
+    with pytest.raises(ValueError, match=r"live reference in dd_package"):
+        sample_density(program, unrooted, source_package, shots=1)
