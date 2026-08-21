@@ -106,6 +106,8 @@ releases may include breaking changes.
   [#1549], [#1953]) ([**@burgholzer**], [**@denialhaag**])
 - ♻️ Improve the backward traversal logic for the `WireIterator` class ([#2184])
   ([**@MatthiasReumann**])
+- ✨ Include one-qubit ops to the `walkProgramGraph` graph traversal 
+  function ([#2205]) ([**@MatthiasReumann**])
 
 ### Removed
 
@@ -829,14 +831,15 @@ for previous changelogs._
 <!-- PR links -->
 
 [#2232]: https://github.com/munich-quantum-toolkit/core/pull/2232
-[#2209]: https://github.com/munich-quantum-toolkit/core/pull/2209
 [#2211]: https://github.com/munich-quantum-toolkit/core/pull/2211
 [#2217]: https://github.com/munich-quantum-toolkit/core/pull/2217
 [#2210]: https://github.com/munich-quantum-toolkit/core/pull/2210
 [#2216]: https://github.com/munich-quantum-toolkit/core/pull/2216
-[#2203]: https://github.com/munich-quantum-toolkit/core/pull/2203
 [#2214]: https://github.com/munich-quantum-toolkit/core/pull/2214
 [#2193]: https://github.com/munich-quantum-toolkit/core/pull/2193
+[#2209]: https://github.com/munich-quantum-toolkit/core/pull/2209
+[#2205]: https://github.com/munich-quantum-toolkit/core/pull/2205
+[#2203]: https://github.com/munich-quantum-toolkit/core/pull/2203
 [#2185]: https://github.com/munich-quantum-toolkit/core/pull/2185
 [#2184]: https://github.com/munich-quantum-toolkit/core/pull/2184
 [#2175]: https://github.com/munich-quantum-toolkit/core/pull/2175
