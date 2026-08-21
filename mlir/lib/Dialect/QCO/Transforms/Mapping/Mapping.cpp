@@ -1040,7 +1040,6 @@ private:
             return WalkResult::advance();
           }
 
-          bool skipped = false;
           for (const auto& [op, indices] : ready) {
             if (!isa<BarrierOp>(op) && isa<UnitaryOpInterface>(op)) {
               const auto i0 = indices[0];
@@ -1067,7 +1066,6 @@ private:
 
                 if (is_contained(layer, gate)) {
                   released.emplace_back(op);
-                  skipped = true;
                 }
 
                 continue;
@@ -1077,9 +1075,9 @@ private:
             released.emplace_back(op);
           }
 
-          if (mode == WalkMode::Collect) {
+          if (mode == WalkMode::Collect && !layer.empty()) {
             mode = WalkMode::BlockSkip;
-          } else if (mode == WalkMode::BlockSkip && !skipped) {
+          } else if (mode == WalkMode::BlockSkip && released.empty()) {
             mode = WalkMode::Collect;
             layer.clear();
           }
