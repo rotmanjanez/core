@@ -16,7 +16,17 @@ from typing import cast
 
 import pytest
 
-from mqt.core.mlir import CompilerTarget, OutputFormat, compile_program
+from mqt.core.mlir import (
+    CompilerTarget,
+    OutputFormat,
+    PayloadEncoding,
+    PayloadFormat,
+    PayloadSpecification,
+    QIRProfile,
+    QIRProgram,
+    TargetEnvironment,
+    compile_program,
+)
 from mqt.core.qdmi import (
     CustomProperty,
     Device,
@@ -557,7 +567,10 @@ c = measure q;
         connectivity=CompilerTarget.Connectivity.all_to_all(),
         native_operations=CompilerTarget.NativeOperations.unrestricted(),
     )
-    program = compile_program(qasm3_program, output=OutputFormat.QIR_BASE, target=target)
+    payload = PayloadSpecification(PayloadFormat("qir", "2.1.0", "base", PayloadEncoding.TEXT))
+    program = compile_program(qasm3_program, target_environment=TargetEnvironment(target, payload))
+    assert isinstance(program, QIRProgram)
+    assert program.profile == QIRProfile.BASE
     assert ProgramFormat.QIR_BASE_STRING in ddsim_device.supported_program_formats()
 
     job = ddsim_device.submit_job(program.llvm_ir, ProgramFormat.QIR_BASE_STRING, num_shots=1024)

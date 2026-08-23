@@ -79,8 +79,7 @@ def MQT_NativeOperationsKind
   let genSpecializedAttr = 0;
 }
 
-def MQT_PayloadDescriptorAttr
-    : MQT_Attr<"PayloadDescriptor", "payload_descriptor"> {
+def MQT_PayloadFormatAttr : MQT_Attr<"PayloadFormat", "payload_format"> {
   let summary = "Exact payload identity";
   let description = [{
     Identifies a payload by format ID, exact version, optional profile ID, and
@@ -118,16 +117,16 @@ def MQT_ProgramCapabilityAttr
   let genVerifyDecl = 1;
 }
 
-def MQT_PayloadEnvAttr : MQT_Attr<"PayloadEnv", "payload_env"> {
+def MQT_PayloadSpecAttr : MQT_Attr<"PayloadSpec", "payload_spec"> {
   let summary = "Selected payload execution contract";
   let description = [{
     Records the exact payload and its effective capabilities. Producers expand
-    descriptor baselines before creating this attribute. The capability list
+    format baselines before creating this attribute. The capability list
     remains available when optional capability metadata is unknown;
     `optional_capabilities_known` records whether that optional metadata is
     complete.
   }];
-  let parameters = (ins "PayloadDescriptorAttr":$descriptor,
+  let parameters = (ins "PayloadFormatAttr":$format,
       MQT_ArrayRefParameter<"ProgramCapabilityAttr">:$capabilities,
       "bool":$optional_capabilities_known);
   let assemblyFormat = "`<` struct(params) `>`";
@@ -198,21 +197,22 @@ def MQT_CompilationTargetAttr
 
 def MQT_TargetEnvAttr
     : MQT_Attr<"TargetEnv", "target_env", [DLTIQueryInterface]> {
-  let summary = "Selected compilation and payload environment";
+  let summary = "Selected compilation and payload specification";
   let description = [{
     Combines typed compiler-target facts with the selected payload contract.
     Optional DLTI extensions carry provider-specific facts. Direct access to
     the typed fields is authoritative.
   }];
   let parameters = (ins "CompilationTargetAttr":$compilation_target,
-      "PayloadEnvAttr":$payload_env,
+      "PayloadSpecAttr":$payload_specification,
       OptionalParameter<"::mlir::MapAttr">:$extensions);
   let assemblyFormat = "`<` struct(params) `>`";
   let genVerifyDecl = 1;
   let extraClassDeclaration = [{
     static constexpr ::llvm::StringLiteral kCompilationTargetKey =
         "mqt.compilation_target";
-    static constexpr ::llvm::StringLiteral kPayloadEnvKey = "mqt.payload_env";
+    static constexpr ::llvm::StringLiteral kPayloadSpecificationKey =
+        "mqt.payload_specification";
 
     ::mlir::FailureOr<::mlir::Attribute>
     query(::mlir::DataLayoutEntryKey key) const;

@@ -56,10 +56,13 @@ void registerMQTCompilerPasses() {
     qco::registerHadamardLifting();
     qco::registerMeasurementLifting();
     qco::registerMergeSingleQubitRotationGates();
+    qco::registerMappingPass();
     qco::registerQuantumLoopUnroll();
     qco::registerRemoveDeadGates();
     qco::registerReplaceClassicalControls();
     qco::registerReuseQubits();
+    qco::registerTargetNativeSynthesis();
+    qco::registerVerifyTargetConformance();
     mqt::registerNormalizeGlobalPhases();
     mqt::registerUnrollModifiers();
     PassPipelineRegistration<>("mqt-qco-default",

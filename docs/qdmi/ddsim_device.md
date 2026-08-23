@@ -43,7 +43,14 @@ compiling a program to QIR. QDMI v1.4 will remove the topology workaround.
 Submit the resulting bitcode to the same device:
 
 ```python
-from mqt.core.mlir import CompilerTarget, OutputFormat, compile_program
+from mqt.core.mlir import (
+    CompilerTarget,
+    PayloadFormat,
+    PayloadEncoding,
+    PayloadSpecification,
+    TargetEnvironment,
+    compile_program,
+)
 from mqt.core.qdmi import ProgramFormat
 from mqt.core.qdmi.driver import open_device
 
@@ -58,10 +65,10 @@ target = CompilerTarget(
         CompilerTarget.Operation("reset", 1, 0),
     ]),
 )
+payload = PayloadSpecification(PayloadFormat("qir", "2.1.0", "base", PayloadEncoding.BINARY))
 program = compile_program(
     "bell.qasm",
-    target=target,
-    output=OutputFormat.QIR_BASE,
+    target_environment=TargetEnvironment(target, payload),
 )
 
 job = device.submit_job(

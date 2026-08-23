@@ -8,13 +8,13 @@
  * Licensed under the MIT License
  */
 
-#include "mlir/Dialect/QCO/Transforms/Mapping/Mapping.h"
-
 #include "mlir/Compiler/Target.h"
+#include "mlir/Compiler/TargetEnvironment.h"
 #include "mlir/Dialect/MQT/IR/MQTDialect.h"
 #include "mlir/Dialect/QCO/IR/QCODialect.h"
 #include "mlir/Dialect/QCO/IR/QCOInterfaces.h"
 #include "mlir/Dialect/QCO/IR/QCOOps.h"
+#include "mlir/Dialect/QCO/Transforms/Passes.h"
 #include "mlir/Dialect/QCO/Utils/Drivers.h"
 #include "mlir/Dialect/QCO/Utils/Graph.h"
 #include "mlir/Dialect/QCO/Utils/Layout.h"
@@ -42,7 +42,6 @@
 #include <mlir/IR/Threading.h>
 #include <mlir/IR/Value.h>
 #include <mlir/IR/ValueRange.h>
-#include <mlir/Pass/Pass.h>
 #include <mlir/Support/LLVM.h>
 #include <mlir/Support/WalkResult.h>
 
@@ -339,24 +338,26 @@ public:
   explicit MappingPass(const MappingPassOptions& options)
       : MappingPassBase(options) {}
 
-  /// Construct mapping for a compiler target.
-  explicit MappingPass(const CompilerTarget& compilerTarget,
-                       const MappingPassOptions& options)
-      : MappingPassBase(options), target(compilerTarget) {}
-
 protected:
   void runOnOperation() override {
     assert(alpha > 0 && "expected alpha > 0");
     assert(niterations > 0 && "expected niterations > 0");
     assert(ntrials > 0 && "expected ntrials > 0");
 
-    if (!target) {
-      llvm::reportFatalUsageError("No compiler target specified!");
+    auto moduleOp = getOperation();
+    const auto& environment = getAnalysis<TargetEnvironmentAnalysis>();
+    if (!environment) {
+      moduleOp.emitError()
+          << "place-and-route requires a valid mqt.target_env: "
+          << environment.error();
+      signalPassFailure();
+      return;
     }
+    target = &environment.environment().target();
 
     IRRewriter rewriter(&getContext());
 
-    auto mod = getOperation();
+    auto mod = moduleOp;
     auto func = mqt::getEntryPoint(mod);
     if (!func) {
       mod.emitError() << "does not contain an entry point function";
@@ -1635,14 +1636,9 @@ private:
     return stats;
   }
 
-  std::optional<CompilerTarget> target;
+  const CompilerTarget* target = nullptr;
 };
 
 } // namespace
-
-std::unique_ptr<Pass> createMappingPass(const CompilerTarget& target,
-                                        MappingPassOptions options) {
-  return std::make_unique<MappingPass>(target, options);
-}
 
 } // namespace mlir::qco

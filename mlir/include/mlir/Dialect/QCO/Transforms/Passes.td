@@ -125,6 +125,10 @@ def MappingPass : Pass<"place-and-route", "mlir::ModuleOp"> {
     Target-defined site identifiers are retained in the resulting
     `qco.static` operations.
 
+    Unknown connectivity is valid when the surviving program has no two-qubit
+    operation. The pass requires known connectivity only when it must route a
+    surviving two-qubit operation.
+
     First, the pass assigns static qubits to the dynamically allocated ones by creating an initial dynamic-to-static
     mapping, which is referred to as the initial layout. The layout covers the
     complete target virtually, while only program qubits and vacant sites used
@@ -174,6 +178,33 @@ def MappingPass : Pass<"place-and-route", "mlir::ModuleOp"> {
                         "A seed used for randomization.">];
   let statistics = [Statistic<"numSwaps", "num-inserted-swaps",
                               "The number of inserted SWAPs">];
+}
+
+def TargetNativeSynthesis : Pass<"target-native-synthesis", "mlir::ModuleOp"> {
+  let dependentDialects = ["mlir::qco::QCODialect",
+                           "::mlir::arith::ArithDialect"];
+  let summary = "Synthesize operations for the native target basis";
+  let description = [{
+    Reads the typed `mqt.target_env` module attribute and lowers non-native
+    unitary operations to one complete synthesis basis supported throughout the
+    compiler target. Unknown native-operation metadata is valid when no
+    surviving unitary operation needs it. Otherwise, the pass fails when the
+    metadata is unknown, no complete basis exists, or an operation has no
+    compile-time unitary matrix.
+  }];
+}
+
+def VerifyTargetConformance
+    : Pass<"verify-target-conformance", "mlir::ModuleOp"> {
+  let dependentDialects = ["mlir::qco::QCODialect"];
+  let summary = "Verify that a mapped program conforms to its compiler target";
+  let description = [{
+    Reads the typed `mqt.target_env` module attribute and verifies that every
+    qubit is assigned to a target site and every remaining quantum operation is
+    native for the compiler target. Unknown native-operation metadata is valid
+    when the surviving program contains no unitary, measurement, or reset
+    operation that needs the metadata.
+  }];
 }
 
 //===----------------------------------------------------------------------===//

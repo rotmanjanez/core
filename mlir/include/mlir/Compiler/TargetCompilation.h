@@ -12,7 +12,6 @@
 
 namespace mlir {
 
-class CompilerTarget;
 class OpPassManager;
 
 /**
@@ -23,7 +22,6 @@ class OpPassManager;
  * native operations, performs a final local cleanup, and verifies target
  * conformance.
  */
-void populateTargetCompilationPipeline(OpPassManager& pm,
-                                       const CompilerTarget& target);
+void populateTargetCompilationPipeline(OpPassManager& pm);
 
 } // namespace mlir
