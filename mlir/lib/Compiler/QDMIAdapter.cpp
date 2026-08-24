@@ -405,10 +405,6 @@ groupProgramFeatures(const std::vector<QDMI_Program_Feature>& features) {
   groups.reserve(features.size());
 
   for (const auto& feature : features) {
-    if (!qdmi::isValidProgramFeature(feature)) {
-      return invalidFeatureGroup("<invalid>", feature.value,
-                                 "record fields are not canonical");
-    }
     const std::string id{std::data(feature.id)};
     const auto key = std::pair{id, feature.value};
     const auto [position, inserted] =
@@ -481,19 +477,9 @@ snapshotPayloadSpecification(const qdmi::Device& device,
         "QDMI device does not accept the selected program format");
   }
 
-  auto encoding = PayloadEncoding::Text;
-  switch (format.encoding) {
-  case QDMI_PROGRAM_ENCODING_TEXT:
-    encoding = PayloadEncoding::Text;
-    break;
-  case QDMI_PROGRAM_ENCODING_BINARY:
-    encoding = PayloadEncoding::Binary;
-    break;
-  default:
-    return llvm::createStringError(
-        std::make_error_code(std::errc::invalid_argument),
-        "Invalid QDMI program format encoding");
-  }
+  const auto encoding = format.encoding == QDMI_PROGRAM_ENCODING_TEXT
+                            ? PayloadEncoding::Text
+                            : PayloadEncoding::Binary;
   PayloadFormat payloadFormat{
       .id = std::data(format.id),
       .version = std::to_string(QDMI_VERSION_MAJOR(format.version)) + "." +
