@@ -88,9 +88,11 @@ releases may include breaking changes.
 ### Changed
 
 - 💥 Load one replaceable QDMI 1.4 Client driver through a validated function
-  table, split `MQT::CoreQDMI` from the packaged `MQT::CoreQDMIDriver`, and use
-  stable Client device IDs across C++, Python, MLIR, Qiskit, PennyLane, and
-  Slurm ([#2229]) ([**@burgholzer**])
+  table and split `MQT::CoreQDMI` from the packaged `MQT::CoreQDMIDriver`.
+  Discover installed device manifests from package metadata without importing
+  provider code, open strict targeted sessions through the packaged Driver's
+  optional extension, and use stable Client device IDs across C++, Python, MLIR,
+  Qiskit, PennyLane, and Slurm ([#2229], [#2230]) ([**@burgholzer**])
 - 💥 Adopt exact QDMI 1.4 program-format descriptors, ordered multi-program
   jobs, indexed byte-exact results, and framework-owned payload conversion
   ([#2226]) ([**@burgholzer**])
@@ -840,6 +842,7 @@ for previous changelogs._
 <!-- PR links -->
 
 [#2233]: https://github.com/munich-quantum-toolkit/core/pull/2233
+[#2230]: https://github.com/munich-quantum-toolkit/core/pull/2230
 [#2229]: https://github.com/munich-quantum-toolkit/core/pull/2229
 [#2227]: https://github.com/munich-quantum-toolkit/core/pull/2227
 [#2226]: https://github.com/munich-quantum-toolkit/core/pull/2226

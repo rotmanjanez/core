@@ -243,9 +243,9 @@ public:
    */
   explicit QDMI_Device_impl_d(std::unique_ptr<qdmi::DeviceLibrary>&& lib,
                               const qdmi::DeviceSessionConfig& config = {},
-                              std::string id = {})
+                              std::string id = {}, const bool strict = false)
       : QDMI_Device_impl_d(std::shared_ptr(std::move(lib)), config,
-                           std::move(id)) {}
+                           std::move(id), nullptr, strict) {}
 
   /**
    * @brief Constructor for the QDMI device.
@@ -260,7 +260,8 @@ public:
   explicit QDMI_Device_impl_d(std::shared_ptr<qdmi::DeviceLibrary> lib,
                               const qdmi::DeviceSessionConfig& config = {},
                               std::string id = {},
-                              QDMI_Child_Device childDevice = nullptr);
+                              QDMI_Child_Device childDevice = nullptr,
+                              bool strict = false);
 
   /**
    * @brief Destructor for the QDMI device.
@@ -425,6 +426,9 @@ private:
   /// @brief Snapshot of devices visible when this session was allocated.
   std::vector<QDMI_Device> devices_;
 
+  /// Owns the device created by a targeted private allocation.
+  std::shared_ptr<QDMI_Device_impl_d> ownedDevice_;
+
 public:
   /// @brief Constructor for the QDMI session.
   explicit QDMI_Session_impl_d(
@@ -432,6 +436,9 @@ public:
 
   /// @brief Constructor from an explicit device-handle snapshot.
   explicit QDMI_Session_impl_d(const std::vector<QDMI_Device>& devices);
+
+  /// @brief Constructor for one privately targeted device session.
+  explicit QDMI_Session_impl_d(std::shared_ptr<QDMI_Device_impl_d> device);
 
   /**
    * @brief Initializes the session.
@@ -513,8 +520,8 @@ class Driver final : public Singleton<Driver> {
   void materializeClientCatalog();
 
   /// Opens a fresh device session with per-call overrides.
-  auto openFresh(std::string_view id, const DeviceSessionConfig& overrides)
-      -> std::shared_ptr<QDMI_Device_impl_d>;
+  auto openFresh(std::string_view id, const DeviceSessionConfig& overrides,
+                 bool strict = false) -> std::shared_ptr<QDMI_Device_impl_d>;
 
 public:
   /**
@@ -565,6 +572,11 @@ public:
    * @see QDMI_session_alloc
    */
   auto sessionAlloc(QDMI_Session* session) -> int;
+
+  /// Allocates a strict one-device session for the private Core extension.
+  auto sessionAllocForDevice(std::string_view id,
+                             const DeviceSessionConfig& config,
+                             QDMI_Session* session) -> int;
 
   /**
    * @brief Frees a session.
