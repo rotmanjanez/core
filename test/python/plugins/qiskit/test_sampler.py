@@ -112,6 +112,18 @@ def test_sampler_run_multiple_cregs(sampler: QDMISampler) -> None:
     assert c1_bits.num_bits == 1
 
 
+def test_sampler_splits_asymmetric_registers_from_the_right() -> None:
+    """QDMI result slot zero is the rightmost Qiskit bit."""
+    bit_arrays = QDMISampler._get_bit_arrays(  # ruff:ignore[private-member-access]
+        [ClassicalRegister(1, "c0"), ClassicalRegister(2, "c1")],
+        [{"101": 1}],
+        (),
+    )
+
+    assert bit_arrays["c0"].get_counts() == {"1": 1}
+    assert bit_arrays["c1"].get_counts() == {"10": 1}
+
+
 def test_sampler_shot_defaults(sampler: QDMISampler) -> None:
     """Test sampler shot defaults."""
     # 1. Use default shots from init

@@ -91,26 +91,17 @@ int setProgram(MQT_DDSIM_QDMI_Device_Job job, const QDMI_Program_Format fmt,
   if (job == nullptr) {
     return QDMI_ERROR_INVALIDARGUMENT;
   }
-  int rc = MQT_DDSIM_QDMI_device_job_set_parameter(
-      job, QDMI_DEVICE_JOB_PARAMETER_PROGRAMFORMAT, sizeof(QDMI_Program_Format),
-      &fmt);
-  if (rc != QDMI_SUCCESS && rc != QDMI_ERROR_NOTSUPPORTED) {
-    return rc;
-  }
   // Text payloads include the trailing '\0' per the QDMI wire convention.
   // Binary payloads ship the exact byte count.
   // The `+1` is safe here because every existing call to `setProgram` with a
   // text format passes a `program` with a string literal or `std::string`, both
   // of which guarantee `'\0'` at `data()[size()]`.
-  const bool isTextProgramFormat = fmt == QDMI_PROGRAM_FORMAT_QASM2 ||
-                                   fmt == QDMI_PROGRAM_FORMAT_QASM3 ||
-                                   fmt == QDMI_PROGRAM_FORMAT_QIRBASESTRING ||
-                                   fmt == QDMI_PROGRAM_FORMAT_QIRADAPTIVESTRING;
+  const bool isTextProgramFormat = fmt.encoding == QDMI_PROGRAM_ENCODING_TEXT;
   const auto bytesToSend =
       isTextProgramFormat ? program.size() + 1 : program.size();
-  rc = MQT_DDSIM_QDMI_device_job_set_parameter(
-      job, QDMI_DEVICE_JOB_PARAMETER_PROGRAM, bytesToSend, program.data());
-  return rc;
+  const void* const programData = program.data();
+  return MQT_DDSIM_QDMI_device_job_set_programs(job, &fmt, 1U, &bytesToSend,
+                                                &programData);
 }
 
 int setShots(MQT_DDSIM_QDMI_Device_Job job, const size_t shots) {
@@ -135,7 +126,7 @@ int submitAndWait(MQT_DDSIM_QDMI_Device_Job job, size_t timeoutSeconds) {
 size_t querySize(MQT_DDSIM_QDMI_Device_Job job, QDMI_Job_Result result) {
   size_t sz = 0;
   const auto rc =
-      MQT_DDSIM_QDMI_device_job_get_results(job, result, 0, nullptr, &sz);
+      MQT_DDSIM_QDMI_device_job_get_results(job, 0U, result, 0, nullptr, &sz);
   EXPECT_EQ(rc, QDMI_SUCCESS);
   return sz;
 }
@@ -158,7 +149,7 @@ getHistogram(MQT_DDSIM_QDMI_Device_Job job) {
   std::string keys(ks > 0 ? ks - 1 : 0, '\0');
   if (ks > 0) {
     const auto rc = MQT_DDSIM_QDMI_device_job_get_results(
-        job, QDMI_JOB_RESULT_HIST_KEYS, ks, keys.data(), nullptr);
+        job, 0U, QDMI_JOB_RESULT_HIST_KEYS, ks, keys.data(), nullptr);
     EXPECT_EQ(rc, QDMI_SUCCESS);
   }
   auto keyVec = splitCSV(keys);
@@ -166,7 +157,7 @@ getHistogram(MQT_DDSIM_QDMI_Device_Job job) {
   std::vector<size_t> vals(vs / sizeof(size_t));
   if (vs > 0) {
     const auto rc = MQT_DDSIM_QDMI_device_job_get_results(
-        job, QDMI_JOB_RESULT_HIST_VALUES, vs, vals.data(), nullptr);
+        job, 0U, QDMI_JOB_RESULT_HIST_VALUES, vs, vals.data(), nullptr);
     EXPECT_EQ(rc, QDMI_SUCCESS);
   }
   return {std::move(keyVec), std::move(vals)};
@@ -177,7 +168,7 @@ std::vector<std::complex<double>> getDenseState(MQT_DDSIM_QDMI_Device_Job job) {
   std::vector<double> buf(sz / sizeof(double));
   if (sz > 0) {
     const auto rc = MQT_DDSIM_QDMI_device_job_get_results(
-        job, QDMI_JOB_RESULT_STATEVECTOR_DENSE, sz, buf.data(), nullptr);
+        job, 0U, QDMI_JOB_RESULT_STATEVECTOR_DENSE, sz, buf.data(), nullptr);
     EXPECT_EQ(rc, QDMI_SUCCESS);
   }
   std::vector<std::complex<double>> out;
@@ -194,7 +185,8 @@ getSparseState(MQT_DDSIM_QDMI_Device_Job job) {
   std::string keys(ks > 0 ? ks - 1 : 0, '\0');
   if (ks > 0) {
     const auto rc = MQT_DDSIM_QDMI_device_job_get_results(
-        job, QDMI_JOB_RESULT_STATEVECTOR_SPARSE_KEYS, ks, keys.data(), nullptr);
+        job, 0U, QDMI_JOB_RESULT_STATEVECTOR_SPARSE_KEYS, ks, keys.data(),
+        nullptr);
     EXPECT_EQ(rc, QDMI_SUCCESS);
   }
   auto keyVec = splitCSV(keys);
@@ -202,7 +194,7 @@ getSparseState(MQT_DDSIM_QDMI_Device_Job job) {
   std::vector<double> vals(vs / sizeof(double));
   if (vs > 0) {
     const auto rc = MQT_DDSIM_QDMI_device_job_get_results(
-        job, QDMI_JOB_RESULT_STATEVECTOR_SPARSE_VALUES, vs, vals.data(),
+        job, 0U, QDMI_JOB_RESULT_STATEVECTOR_SPARSE_VALUES, vs, vals.data(),
         nullptr);
     EXPECT_EQ(rc, QDMI_SUCCESS);
   }
@@ -219,7 +211,7 @@ std::vector<double> getDenseProbabilities(MQT_DDSIM_QDMI_Device_Job job) {
   std::vector<double> out(sz / sizeof(double));
   if (sz > 0) {
     const auto rc = MQT_DDSIM_QDMI_device_job_get_results(
-        job, QDMI_JOB_RESULT_PROBABILITIES_DENSE, sz, out.data(), nullptr);
+        job, 0U, QDMI_JOB_RESULT_PROBABILITIES_DENSE, sz, out.data(), nullptr);
     EXPECT_EQ(rc, QDMI_SUCCESS);
   }
   return out;
@@ -231,7 +223,7 @@ getSparseProbabilities(MQT_DDSIM_QDMI_Device_Job job) {
   std::string keys(ks > 0 ? ks - 1 : 0, '\0');
   if (ks > 0) {
     const auto rc = MQT_DDSIM_QDMI_device_job_get_results(
-        job, QDMI_JOB_RESULT_PROBABILITIES_SPARSE_KEYS, ks, keys.data(),
+        job, 0U, QDMI_JOB_RESULT_PROBABILITIES_SPARSE_KEYS, ks, keys.data(),
         nullptr);
     EXPECT_EQ(rc, QDMI_SUCCESS);
   }
@@ -240,7 +232,7 @@ getSparseProbabilities(MQT_DDSIM_QDMI_Device_Job job) {
   std::vector<double> vals(vs / sizeof(double));
   if (vs > 0) {
     const auto rc = MQT_DDSIM_QDMI_device_job_get_results(
-        job, QDMI_JOB_RESULT_PROBABILITIES_SPARSE_VALUES, vs, vals.data(),
+        job, 0U, QDMI_JOB_RESULT_PROBABILITIES_SPARSE_VALUES, vs, vals.data(),
         nullptr);
     EXPECT_EQ(rc, QDMI_SUCCESS);
   }

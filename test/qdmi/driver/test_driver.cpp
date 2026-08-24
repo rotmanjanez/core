@@ -9,6 +9,7 @@
  */
 
 #include "qdmi/Client.hpp"
+#include "qdmi/ProgramFormat.hpp"
 #include "qdmi/driver/Driver.hpp"
 
 #include <gmock/gmock-matchers.h>
@@ -19,6 +20,7 @@
 #include <algorithm>
 #include <array>
 #include <barrier>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -462,11 +464,14 @@ TEST_P(DriverTest, JobSetParameter) {
             QDMI_ERROR_INVALIDARGUMENT);
 }
 
+TEST_P(DriverTest, JobSetPrograms) {
+  EXPECT_EQ(
+      QDMI_job_set_programs(nullptr, &qdmi::OPENQASM2, 0U, nullptr, nullptr),
+      QDMI_ERROR_INVALIDARGUMENT);
+}
+
 TEST_P(DriverJobTest, JobSetParameter) {
-  EXPECT_THAT(QDMI_job_set_parameter(job, QDMI_JOB_PARAMETER_PROGRAM,
-                                     sizeof(QDMI_Program_Format), nullptr),
-              testing::AnyOf(QDMI_SUCCESS, QDMI_ERROR_NOTSUPPORTED));
-  const QDMI_Program_Format value = QDMI_PROGRAM_FORMAT_QASM2;
+  const QDMI_Program_Format value = qdmi::OPENQASM2;
   EXPECT_THAT(QDMI_job_set_parameter(job, QDMI_JOB_PARAMETER_PROGRAMFORMAT,
                                      sizeof(QDMI_Program_Format), &value),
               testing::AnyOf(QDMI_SUCCESS, QDMI_ERROR_NOTSUPPORTED));
@@ -482,6 +487,10 @@ TEST_P(DriverJobTest, JobSetParameter) {
     EXPECT_THAT(QDMI_job_set_parameter(job, param, 0, nullptr),
                 testing::AnyOf(QDMI_SUCCESS, QDMI_ERROR_NOTSUPPORTED));
   }
+  constexpr auto unnamedCustom =
+      std::bit_cast<QDMI_Job_Parameter>(QDMI_CUSTOM_ENUM_VALUE_MIN + 42);
+  EXPECT_EQ(QDMI_job_set_parameter(job, unnamedCustom, 0, nullptr),
+            QDMI_ERROR_NOTSUPPORTED);
   EXPECT_EQ(QDMI_job_set_parameter(job, QDMI_JOB_PARAMETER_MAX, 0, nullptr),
             QDMI_ERROR_INVALIDARGUMENT);
 }
@@ -499,19 +508,19 @@ TEST_P(DriverJobTest, JobQueryProperty) {
 
   EXPECT_THAT(QDMI_job_query_property(job, QDMI_JOB_PROPERTY_PROGRAM, 0,
                                       nullptr, nullptr),
-              testing::AnyOf(QDMI_SUCCESS, QDMI_ERROR_NOTSUPPORTED));
+              testing::AnyOf(QDMI_ERROR_BADSTATE, QDMI_ERROR_NOTSUPPORTED));
 
-  QDMI_Program_Format value = QDMI_PROGRAM_FORMAT_QASM2;
+  QDMI_Program_Format value = qdmi::OPENQASM2;
   auto result = QDMI_job_set_parameter(job, QDMI_JOB_PARAMETER_PROGRAMFORMAT,
                                        sizeof(QDMI_Program_Format), &value);
   EXPECT_THAT(result, testing::AnyOf(QDMI_SUCCESS, QDMI_ERROR_NOTSUPPORTED));
   if (result == QDMI_SUCCESS) {
-    value = QDMI_PROGRAM_FORMAT_MAX;
+    value = {};
     EXPECT_EQ(QDMI_job_query_property(job, QDMI_JOB_PROPERTY_PROGRAMFORMAT,
                                       sizeof(QDMI_Program_Format), &value,
                                       nullptr),
               QDMI_SUCCESS);
-    EXPECT_EQ(value, QDMI_PROGRAM_FORMAT_QASM2);
+    EXPECT_TRUE(qdmi::equal(value, qdmi::OPENQASM2));
   }
   size_t numShots = 1;
   result = QDMI_job_set_parameter(job, QDMI_JOB_PARAMETER_SHOTSNUM,
@@ -537,6 +546,10 @@ TEST_P(DriverJobTest, JobQueryProperty) {
     EXPECT_EQ(QDMI_job_query_property(job, property, 0, nullptr, nullptr),
               QDMI_ERROR_NOTSUPPORTED);
   }
+  constexpr auto unnamedCustom =
+      std::bit_cast<QDMI_Job_Property>(QDMI_CUSTOM_ENUM_VALUE_MIN + 42);
+  EXPECT_EQ(QDMI_job_query_property(job, unnamedCustom, 0, nullptr, nullptr),
+            QDMI_ERROR_NOTSUPPORTED);
 }
 
 TEST_P(DriverTest, JobSubmit) {
@@ -545,7 +558,7 @@ TEST_P(DriverTest, JobSubmit) {
 
 TEST_P(DriverJobTest, JobSubmit) {
   EXPECT_THAT(QDMI_job_submit(job),
-              testing::AnyOf(QDMI_SUCCESS, QDMI_ERROR_NOTSUPPORTED));
+              testing::AnyOf(QDMI_ERROR_BADSTATE, QDMI_ERROR_NOTSUPPORTED));
 }
 
 TEST_P(DriverTest, JobCancel) {
@@ -579,14 +592,14 @@ TEST_P(DriverJobTest, JobWait) {
 }
 
 TEST_P(DriverTest, JobGetResults) {
-  EXPECT_EQ(
-      QDMI_job_get_results(nullptr, QDMI_JOB_RESULT_MAX, 0, nullptr, nullptr),
-      QDMI_ERROR_INVALIDARGUMENT);
+  EXPECT_EQ(QDMI_job_get_results(nullptr, 0U, QDMI_JOB_RESULT_MAX, 0, nullptr,
+                                 nullptr),
+            QDMI_ERROR_INVALIDARGUMENT);
 }
 
 TEST_P(DriverJobTest, JobGetResults) {
   EXPECT_THAT(
-      QDMI_job_get_results(job, QDMI_JOB_RESULT_SHOTS, 0, nullptr, nullptr),
+      QDMI_job_get_results(job, 0U, QDMI_JOB_RESULT_SHOTS, 0, nullptr, nullptr),
       testing::AnyOf(QDMI_SUCCESS, QDMI_ERROR_NOTSUPPORTED,
                      QDMI_ERROR_BADSTATE));
 }
@@ -840,6 +853,7 @@ TEST_P(DriverTest, QueryNeedsCalibration) {
   EXPECT_EQ(ret, QDMI_SUCCESS);
   EXPECT_THAT(needsCalibration, testing::AnyOf(0, 1));
 }
+
 constexpr std::array DEVICES{"MQT SC Default QDMI Device",
                              "MQT Core DDSIM QDMI Device"};
 
@@ -1327,8 +1341,7 @@ TEST(DeviceRegistrationTest, FreshJobRetainsItsDeviceSession) {
   std::optional<qdmi::Job> job;
   {
     auto device = qdmi::Session::openDevice("test.session-overrides");
-    job.emplace(
-        device.submitJob("OPENQASM 2.0;", QDMI_PROGRAM_FORMAT_QASM2, 1));
+    job.emplace(device.submitJob("OPENQASM 2.0;", qdmi::OPENQASM2, 1));
   }
 
   ASSERT_TRUE(job.has_value());
@@ -1403,6 +1416,64 @@ TEST(DeviceRegistrationTest, RetrievesExistingJobs) {
 
   const auto retrievedJob = device.retrieveJobById("session-job");
   EXPECT_EQ(retrievedJob.getId(), "session-job");
+  EXPECT_EQ(retrievedJob.getProgramsNum(), 2U);
+  EXPECT_THROW(std::ignore = retrievedJob.getNumShots(), std::runtime_error);
+  EXPECT_EQ(retrievedJob.getShots(), (std::vector<std::string>{"10", "01"}));
+  EXPECT_EQ(retrievedJob.getProgramOutput(),
+            (std::vector<std::byte>{std::byte{'x'}, std::byte{0},
+                                    std::byte{'y'}, std::byte{0}}));
+  EXPECT_EQ(retrievedJob.getShots(1U), (std::vector<std::string>{"11", "00"}));
+  EXPECT_EQ(retrievedJob.getProgramOutput(1U),
+            (std::vector<std::byte>{std::byte{'z'}, std::byte{0}}));
+  EXPECT_EQ(retrievedJob.getResults(1U, QDMI_JOB_RESULT_PROGRAMOUTPUT),
+            retrievedJob.getProgramOutput(1U));
+  EXPECT_THROW(std::ignore = retrievedJob.getProgramOutput(2U),
+               std::invalid_argument);
+}
+
+TEST(DeviceRegistrationTest, SubmitsOrderedBinaryProgramsAtomically) {
+  registerSessionTestDevice();
+  const auto device = qdmi::Session::openDevice("test.session-overrides");
+  const std::array programs{
+      std::vector<std::byte>{std::byte{'a'}, std::byte{0}, std::byte{'b'},
+                             std::byte{0}},
+      std::vector<std::byte>{std::byte{0xff}, std::byte{0}}};
+
+  const auto job = device.submitPrograms(programs, qdmi::QIR21_BASE_BINARY, 3U);
+  EXPECT_EQ(job.getProgramsNum(), programs.size());
+  EXPECT_EQ(job.getProgramOutput(0U), programs[0]);
+  EXPECT_EQ(job.getProgramOutput(1U), programs[1]);
+}
+
+TEST(DeviceRegistrationTest, SubmitsOrderedTextProgramsAtomically) {
+  registerSessionTestDevice();
+  const auto device = qdmi::Session::openDevice("test.session-overrides");
+  const std::array<std::string, 2> programs{"OPENQASM 3.0;", "OPENQASM 3.0;"};
+
+  const auto job = device.submitPrograms(programs, qdmi::OPENQASM3, 3U);
+  ASSERT_EQ(job.getProgramsNum(), programs.size());
+  for (size_t index = 0U; index < programs.size(); ++index) {
+    const auto output = job.getProgramOutput(index);
+    ASSERT_EQ(output.size(), programs[index].size() + 1U);
+    EXPECT_EQ(
+        std::memcmp(output.data(), programs[index].c_str(), output.size()), 0);
+  }
+}
+
+TEST(DeviceRegistrationTest, RejectsMalformedTextResultFraming) {
+  registerSessionTestDevice();
+  const auto device = qdmi::Session::openDevice("test.session-overrides");
+  const auto job = device.retrieveJobById("session-job");
+
+  EXPECT_THROW(std::ignore = job.getCounts(), std::invalid_argument);
+}
+
+TEST(DeviceRegistrationTest, RejectsEmbeddedNullInTextProgram) {
+  registerSessionTestDevice();
+  const auto device = qdmi::Session::openDevice("test.session-overrides");
+  const auto job = device.retrieveJobById("malformed-text-job");
+
+  EXPECT_THROW(std::ignore = job.getProgram(), std::invalid_argument);
 }
 
 TEST(DeviceRegistrationTest, FreshChildDeviceRetainsItsRootSession) {

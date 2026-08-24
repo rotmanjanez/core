@@ -78,11 +78,17 @@ releases may include breaking changes.
 
 #### Other additions
 
+- ✨ Add backend-owned program serialization and result decoding to QDMI Qiskit
+  backends. [QDMI-on-IQM] now provides the IQM JSON integration and `MoveGate`
+  ([#2114], [#2226]) ([**@marcelwa**], [**@burgholzer**])
 - 🐳 Add dev container configuration for a consistent local development
   environment ([#1786]) ([**@denialhaag**])
 
 ### Changed
 
+- 💥 Adopt exact QDMI 1.4 program-format descriptors, ordered multi-program
+  jobs, indexed byte-exact results, and framework-owned payload conversion
+  ([#2226]) ([**@burgholzer**])
 - 💥 Require Python 3.11 or newer ([#2209]) ([**@denialhaag**],
   [**@burgholzer**])
 - ⬆️ Update `nanobind` to version 3.0.0 ([#2209]) ([**@denialhaag**],
@@ -825,6 +831,7 @@ for previous changelogs._
 
 <!-- PR links -->
 
+[#2226]: https://github.com/munich-quantum-toolkit/core/pull/2226
 [#2219]: https://github.com/munich-quantum-toolkit/core/pull/2219
 [#2215]: https://github.com/munich-quantum-toolkit/core/pull/2215
 [#2218]: https://github.com/munich-quantum-toolkit/core/pull/2218

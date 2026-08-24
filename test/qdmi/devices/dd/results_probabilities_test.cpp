@@ -24,7 +24,7 @@
 TEST(ResultsProbabilities, DenseSumToOneAndBufferTooSmall) {
   const qdmi_test::SessionGuard s{};
   const qdmi_test::JobGuard j{s.session};
-  ASSERT_EQ(qdmi_test::setProgram(j.job, QDMI_PROGRAM_FORMAT_QASM3,
+  ASSERT_EQ(qdmi_test::setProgram(j.job, qdmi_test::OPENQASM3,
                                   qdmi_test::QASM3_BELL_STATE),
             QDMI_SUCCESS);
   ASSERT_EQ(qdmi_test::setShots(j.job, 0), QDMI_SUCCESS);
@@ -43,8 +43,8 @@ TEST(ResultsProbabilities, DenseSumToOneAndBufferTooSmall) {
   if (sz > 0) {
     std::vector<char> tooSmall(sz - 1);
     EXPECT_EQ(MQT_DDSIM_QDMI_device_job_get_results(
-                  j.job, QDMI_JOB_RESULT_PROBABILITIES_DENSE, tooSmall.size(),
-                  tooSmall.data(), nullptr),
+                  j.job, 0U, QDMI_JOB_RESULT_PROBABILITIES_DENSE,
+                  tooSmall.size(), tooSmall.data(), nullptr),
               QDMI_ERROR_INVALIDARGUMENT);
   }
 }
@@ -52,7 +52,7 @@ TEST(ResultsProbabilities, DenseSumToOneAndBufferTooSmall) {
 TEST(ResultsProbabilities, SparseSumToOneAndBufferTooSmall) {
   const qdmi_test::SessionGuard s{};
   const qdmi_test::JobGuard j{s.session};
-  ASSERT_EQ(qdmi_test::setProgram(j.job, QDMI_PROGRAM_FORMAT_QASM3,
+  ASSERT_EQ(qdmi_test::setProgram(j.job, qdmi_test::OPENQASM3,
                                   qdmi_test::QASM3_BELL_STATE),
             QDMI_SUCCESS);
   ASSERT_EQ(qdmi_test::setShots(j.job, 0), QDMI_SUCCESS);
@@ -71,7 +71,7 @@ TEST(ResultsProbabilities, SparseSumToOneAndBufferTooSmall) {
   if (ksz > 0) {
     std::vector<char> tooSmall(ksz - 1);
     EXPECT_EQ(MQT_DDSIM_QDMI_device_job_get_results(
-                  j.job, QDMI_JOB_RESULT_PROBABILITIES_SPARSE_KEYS,
+                  j.job, 0U, QDMI_JOB_RESULT_PROBABILITIES_SPARSE_KEYS,
                   tooSmall.size(), tooSmall.data(), nullptr),
               QDMI_ERROR_INVALIDARGUMENT);
   }
@@ -80,7 +80,7 @@ TEST(ResultsProbabilities, SparseSumToOneAndBufferTooSmall) {
   if (vsz > 0) {
     std::vector<char> tooSmall(vsz - 1);
     EXPECT_EQ(MQT_DDSIM_QDMI_device_job_get_results(
-                  j.job, QDMI_JOB_RESULT_PROBABILITIES_SPARSE_VALUES,
+                  j.job, 0U, QDMI_JOB_RESULT_PROBABILITIES_SPARSE_VALUES,
                   tooSmall.size(), tooSmall.data(), nullptr),
               QDMI_ERROR_INVALIDARGUMENT);
   }

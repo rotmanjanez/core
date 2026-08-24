@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include "qdmi/ProgramFormat.hpp"
 #include "qdmi/common/Common.hpp"
 #include "qdmi/driver/Driver.hpp"
 #include "qdmi/types.h"
@@ -69,6 +70,32 @@ concept custom_property_value =
     std::same_as<T, std::vector<std::byte>>;
 
 namespace detail {
+[[nodiscard]] inline std::string
+decodeText(std::string value, const std::string_view description) {
+  if (value.empty() || value.back() != '\0') {
+    throw std::invalid_argument(std::string(description) +
+                                " is not null-terminated");
+  }
+  if (value.find('\0') != value.size() - 1U) {
+    throw std::invalid_argument(std::string(description) +
+                                " contains an embedded null byte");
+  }
+  value.pop_back();
+  return value;
+}
+
+[[nodiscard]] inline std::string
+decodeText(const std::span<const std::byte> value,
+           const std::string_view description) {
+  if (value.empty()) {
+    throw std::invalid_argument(std::string(description) +
+                                " is not null-terminated");
+  }
+  return decodeText(
+      std::string{reinterpret_cast<const char*>(value.data()), value.size()},
+      description);
+}
+
 [[nodiscard]] inline std::optional<size_t>
 queuePositionFromResult(const int result, const size_t queuePosition) {
   if (result == QDMI_ERROR_NOTSUPPORTED || result == QDMI_ERROR_BADSTATE) {
@@ -98,12 +125,7 @@ queryCustomValue(Query query, const std::string_view description) {
   if constexpr (std::same_as<T, std::vector<std::byte>>) {
     return bytes;
   } else if constexpr (std::same_as<T, std::string>) {
-    if (bytes.empty() || bytes.back() != std::byte{0}) {
-      throw std::invalid_argument("Cannot decode " + std::string(description) +
-                                  " as a null-terminated string");
-    }
-    return std::string(reinterpret_cast<const char*>(bytes.data()),
-                       bytes.size() - 1);
+    return decodeText(bytes, description);
   } else {
     if (bytes.size() != sizeof(T)) {
       throw std::invalid_argument("Cannot decode " + std::string(description) +
@@ -227,23 +249,6 @@ toJobResult(const CustomProperty property) {
   throw std::invalid_argument("Invalid custom property selector");
 }
 } // namespace detail
-
-/**
- * @brief Returns whether a program format carries a binary payload.
- * @details `QDMI_PROGRAM_FORMAT_QIRBASEMODULE`,
- * `QDMI_PROGRAM_FORMAT_QIRADAPTIVEMODULE`, and `QDMI_PROGRAM_FORMAT_QPY` hold
- * bitcode or another serialized object. Such a payload can contain a null byte
- * and is not text, so it must be submitted as exact bytes. The string overload
- * of `Device::submitJob` rejects these formats.
- * @param format The program format to classify.
- * @return True if the format requires exact-byte submission.
- */
-[[nodiscard]] constexpr bool
-isBinaryProgramFormat(const QDMI_Program_Format format) noexcept {
-  return format == QDMI_PROGRAM_FORMAT_QIRBASEMODULE ||
-         format == QDMI_PROGRAM_FORMAT_QIRADAPTIVEMODULE ||
-         format == QDMI_PROGRAM_FORMAT_QPY;
-}
 
 /**
  * @brief Concept for ranges that are contiguous in memory and can be
@@ -544,6 +549,24 @@ public:
   getSupportedProgramFormats() const;
 
   /**
+   * @brief Try to return the program formats reported by the device.
+   * @return The reported formats, including an empty vector when the device
+   * reports no formats, or `std::nullopt` when the property is unsupported.
+   * @see QDMI_DEVICE_PROPERTY_SUPPORTEDPROGRAMFORMATS
+   */
+  [[nodiscard]] std::optional<std::vector<QDMI_Program_Format>>
+  tryGetSupportedProgramFormats() const;
+
+  /**
+   * @brief Try to query the complete optional capabilities for an exact
+   * payload.
+   * @return The complete optional list, or `std::nullopt` when metadata is
+   * unknown.
+   */
+  [[nodiscard]] std::optional<std::vector<QDMI_Program_Feature>>
+  tryGetProgramFeatures(const QDMI_Program_Format& format) const;
+
+  /**
    * @brief Returns the direct child devices managed by this device.
    * @return The child devices, or an empty vector if child devices are not
    * supported.
@@ -587,8 +610,7 @@ public:
    * @brief Submits a textual program.
    * @details The terminating null byte required by QDMI text formats is
    * included in the submitted payload.
-   * @throws std::invalid_argument If the format requires binary submission,
-   * names a batch job, or names a calibration run.
+   * @throws std::invalid_argument If the format requires binary submission.
    * @see QDMI_job_submit
    */
   [[nodiscard]] Job submitJob(
@@ -603,8 +625,6 @@ public:
    * @brief Submits a binary program.
    * @details The bytes are submitted exactly as provided without appending a
    * null byte.
-   * @throws std::invalid_argument If the format names a batch job or a
-   * calibration run.
    * @see QDMI_job_submit
    */
   [[nodiscard]] Job submitJob(
@@ -617,20 +637,13 @@ public:
       const std::optional<CustomJobParameter>& custom5 = std::nullopt) const;
 
   /**
-   * @brief Triggers a calibration run.
-   * @details A device that reports a nonzero
-   * `QDMI_DEVICE_PROPERTY_NEEDSCALIBRATION` is asked to calibrate by submitting
-   * a job in the `QDMI_PROGRAM_FORMAT_CALIBRATION` format. QDMI does not
-   * require a program for such a job, so the payload is optional; when it is
-   * present, the device defines what it means, which is usually a
-   * configuration for the run. A calibration run executes no circuit, so no
-   * shot count is set.
-   * @param program The calibration payload. An empty span or `std::nullopt`
-   * means that the job has no payload.
-   * @see QDMI_job_submit
+   * @brief Submits an ordered list of textual programs as one job.
+   * @details QDMI copies the complete list atomically. Each submitted payload
+   * includes exactly one trailing null byte.
    */
-  [[nodiscard]] Job submitCalibrationJob(
-      std::optional<std::span<const std::byte>> program = std::nullopt,
+  [[nodiscard]] Job submitPrograms(
+      std::span<const std::string> programs, QDMI_Program_Format format,
+      size_t numShots,
       const std::optional<CustomJobParameter>& custom1 = std::nullopt,
       const std::optional<CustomJobParameter>& custom2 = std::nullopt,
       const std::optional<CustomJobParameter>& custom3 = std::nullopt,
@@ -638,14 +651,12 @@ public:
       const std::optional<CustomJobParameter>& custom5 = std::nullopt) const;
 
   /**
-   * @brief Triggers a calibration run with a text payload.
-   * @details The terminating null byte required by QDMI text formats is
-   * included in the submitted payload.
-   * @param program The calibration payload.
-   * @see QDMI_job_submit
+   * @brief Submits an ordered list of binary programs as one job.
+   * @details QDMI copies every payload byte atomically.
    */
-  [[nodiscard]] Job submitCalibrationJob(
-      const std::string& program,
+  [[nodiscard]] Job submitPrograms(
+      std::span<const std::vector<std::byte>> programs,
+      QDMI_Program_Format format, size_t numShots,
       const std::optional<CustomJobParameter>& custom1 = std::nullopt,
       const std::optional<CustomJobParameter>& custom2 = std::nullopt,
       const std::optional<CustomJobParameter>& custom3 = std::nullopt,
@@ -701,11 +712,11 @@ private:
       }
 
       qdmi::throwIfError(result, msg);
-      std::string value(size - 1, '\0');
+      std::string value(size, '\0');
       result = QDMI_device_query_device_property(device_.get(), prop, size,
                                                  value.data(), nullptr);
       qdmi::throwIfError(result, msg);
-      return value;
+      return detail::decodeText(std::move(value), msg);
     } else if constexpr (maybe_optional_size_constructible_contiguous_range<
                              T>) {
       size_t size = 0;
@@ -742,14 +753,30 @@ private:
   }
 
   [[nodiscard]] Job
-  submitJobImpl(QDMI_Program_Format format,
-                std::optional<std::span<const std::byte>> program,
-                std::optional<size_t> numShots,
+  submitJobImpl(QDMI_Program_Format format, std::span<const std::byte> program,
+                size_t numShots,
                 const std::optional<CustomJobParameter>& custom1,
                 const std::optional<CustomJobParameter>& custom2,
                 const std::optional<CustomJobParameter>& custom3,
                 const std::optional<CustomJobParameter>& custom4,
                 const std::optional<CustomJobParameter>& custom5) const;
+
+  [[nodiscard]] Job
+  submitProgramsImpl(QDMI_Program_Format format, std::span<const size_t> sizes,
+                     std::span<const void* const> programs, size_t numShots,
+                     const std::optional<CustomJobParameter>& custom1,
+                     const std::optional<CustomJobParameter>& custom2,
+                     const std::optional<CustomJobParameter>& custom3,
+                     const std::optional<CustomJobParameter>& custom4,
+                     const std::optional<CustomJobParameter>& custom5) const;
+
+  static void
+  setCommonJobParameters(QDMI_Job job, std::optional<size_t> numShots,
+                         const std::optional<CustomJobParameter>& custom1,
+                         const std::optional<CustomJobParameter>& custom2,
+                         const std::optional<CustomJobParameter>& custom3,
+                         const std::optional<CustomJobParameter>& custom4,
+                         const std::optional<CustomJobParameter>& custom5);
 
   static void setCustomJobParam(QDMI_Job job, QDMI_Job_Parameter param,
                                 const CustomJobParameter& value);
@@ -801,8 +828,8 @@ public:
 
   /**
    * @brief Gets a textual program without its terminating null byte.
-   * @throws std::invalid_argument If the format is not textual or the device
-   * does not return a null-terminated payload.
+   * @throws std::invalid_argument If the format is not textual or the payload
+   * does not contain exactly one null byte as its final byte.
    */
   [[nodiscard]] std::string getProgram() const;
 
@@ -813,6 +840,9 @@ public:
 
   /// Get the number of shots
   [[nodiscard]] size_t getNumShots() const;
+
+  /// Get the number of programs in the job.
+  [[nodiscard]] size_t getProgramsNum() const;
 
   /**
    * @brief Gets the current number of jobs ahead of this job in its queue.
@@ -850,45 +880,60 @@ public:
    * @tparam T Expected value type. Use `std::vector<std::byte>` to retrieve the
    * raw value without interpretation.
    * @param property Custom result slot to query.
+   * @param programIndex Index of the submitted program.
    * @return The decoded value, or `std::nullopt` if the slot is unsupported.
    * @throws std::invalid_argument If the returned bytes do not match `T`.
    */
   template <custom_property_value T>
   [[nodiscard]] std::optional<T>
-  getCustomResult(const CustomProperty property) const {
+  getCustomResult(const CustomProperty property,
+                  const size_t programIndex = 0U) const {
     const auto qdmiResult = detail::toJobResult(property);
     return detail::queryCustomValue<T>(
-        [this, qdmiResult](const size_t size, void* value, size_t* sizeRet) {
-          return QDMI_job_get_results(job_.get(), qdmiResult, size, value,
-                                      sizeRet);
+        [this, programIndex, qdmiResult](const size_t size, void* value,
+                                         size_t* sizeRet) {
+          return QDMI_job_get_results(job_.get(), programIndex, qdmiResult,
+                                      size, value, sizeRet);
         },
         "custom job result " + std::to_string(static_cast<unsigned>(property)));
   }
 
   /**
+   * @brief Returns one raw result without interpreting its bytes.
+   * @param programIndex Index of the submitted program.
+   * @param result Result representation to query.
+   */
+  [[nodiscard]] std::vector<std::byte> getResults(size_t programIndex,
+                                                  QDMI_Job_Result result) const;
+
+  /**
    * @brief Returns the measurement shots as a vector of bitstrings.
    * @see QDMI_JOB_RESULT_SHOTS
    */
-  [[nodiscard]] std::vector<std::string> getShots() const;
+  [[nodiscard]] std::vector<std::string>
+  getShots(size_t programIndex = 0U) const;
 
   /**
    * @brief Returns a map of measurement outcomes to their respective counts.
    * @see QDMI_JOB_RESULT_HIST_KEYS
    * @see QDMI_JOB_RESULT_HIST_VALUES
    */
-  [[nodiscard]] std::map<std::string, size_t> getCounts() const;
+  [[nodiscard]] std::map<std::string, size_t>
+  getCounts(size_t programIndex = 0U) const;
 
   /**
    * @brief Returns the dense state vector as a vector of complex numbers.
    * @see QDMI_JOB_RESULT_STATEVECTOR_DENSE
    */
-  [[nodiscard]] std::vector<std::complex<double>> getDenseStateVector() const;
+  [[nodiscard]] std::vector<std::complex<double>>
+  getDenseStateVector(size_t programIndex = 0U) const;
 
   /**
    * @brief Returns the dense probabilities as a vector of doubles.
    * @see QDMI_JOB_RESULT_PROBABILITIES_DENSE
    */
-  [[nodiscard]] std::vector<double> getDenseProbabilities() const;
+  [[nodiscard]] std::vector<double>
+  getDenseProbabilities(size_t programIndex = 0U) const;
 
   /**
    * @brief Returns the sparse state vector as a map of bitstrings to complex
@@ -897,7 +942,7 @@ public:
    * @see QDMI_JOB_RESULT_STATEVECTOR_SPARSE_VALUES
    */
   [[nodiscard]] std::map<std::string, std::complex<double>>
-  getSparseStateVector() const;
+  getSparseStateVector(size_t programIndex = 0U) const;
 
   /**
    * @brief Returns the sparse probabilities as a map of bitstrings to
@@ -905,7 +950,15 @@ public:
    * @see QDMI_JOB_RESULT_PROBABILITIES_SPARSE_KEYS
    * @see QDMI_JOB_RESULT_PROBABILITIES_SPARSE_VALUES
    */
-  [[nodiscard]] std::map<std::string, double> getSparseProbabilities() const;
+  [[nodiscard]] std::map<std::string, double>
+  getSparseProbabilities(size_t programIndex = 0U) const;
+
+  /**
+   * @brief Returns the exact format-defined program output bytes.
+   * @see QDMI_JOB_RESULT_PROGRAMOUTPUT
+   */
+  [[nodiscard]] std::vector<std::byte>
+  getProgramOutput(size_t programIndex = 0U) const;
 
   auto operator<=>(const Job&) const noexcept = default;
 
@@ -1034,12 +1087,12 @@ private:
       }
       qdmi::throwIfError(result,
                          std::string("Querying size") + qdmi::toString(prop));
-      std::string value(size - 1, '\0');
+      std::string value(size, '\0');
       qdmi::throwIfError(QDMI_device_query_site_property(device_.get(), site_,
                                                          prop, size,
                                                          value.data(), nullptr),
                          std::string("Querying ") + qdmi::toString(prop));
-      return value;
+      return detail::decodeText(std::move(value), qdmi::toString(prop));
     } else {
       remove_optional_t<T> value{};
       const auto result = QDMI_device_query_site_property(
@@ -1211,12 +1264,12 @@ private:
         }
       }
       qdmi::throwIfError(result, msg);
-      std::string value(size - 1, '\0');
+      std::string value(size, '\0');
       result = QDMI_device_query_operation_property(
           device_.get(), operation_, sites.size(), qdmiSites.data(),
           params.size(), params.data(), prop, size, value.data(), nullptr);
       qdmi::throwIfError(result, msg);
-      return value;
+      return detail::decodeText(std::move(value), msg);
     } else if constexpr (maybe_optional_size_constructible_contiguous_range<
                              T>) {
       size_t size = 0;

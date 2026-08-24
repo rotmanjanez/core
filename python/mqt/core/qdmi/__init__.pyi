@@ -10,7 +10,7 @@
 
 import enum
 from collections.abc import Sequence
-from typing import overload
+from typing import Final, overload
 
 from mqt.core.qdmi import driver as driver
 from mqt.core.qdmi import slurm as slurm
@@ -34,22 +34,28 @@ class Job:
     def cancel(self) -> None:
         """Cancels the job."""
 
-    def get_shots(self) -> list[str]:
+    def get_shots(self, program_index: int = 0) -> list[str]:
         """Returns the raw shot results from the job."""
 
-    def get_counts(self) -> dict[str, int]:
+    def get_counts(self, program_index: int = 0) -> dict[str, int]:
         """Returns the measurement counts from the job."""
 
-    def get_dense_statevector(self) -> list[complex]:
+    def get_results(self, program_index: int, result: Result) -> bytes:
+        """Returns one indexed result as exact bytes."""
+
+    def get_program_output(self, program_index: int = 0) -> bytes:
+        """Returns the exact format-defined program output bytes."""
+
+    def get_dense_statevector(self, program_index: int = 0) -> list[complex]:
         """Returns the dense statevector from the job (typically only available from simulator devices)."""
 
-    def get_dense_probabilities(self) -> list[float]:
+    def get_dense_probabilities(self, program_index: int = 0) -> list[float]:
         """Returns the dense probabilities from the job (typically only available from simulator devices)."""
 
-    def get_sparse_statevector(self) -> dict[str, complex]:
+    def get_sparse_statevector(self, program_index: int = 0) -> dict[str, complex]:
         """Returns the sparse statevector from the job (typically only available from simulator devices)."""
 
-    def get_sparse_probabilities(self) -> dict[str, float]:
+    def get_sparse_probabilities(self, program_index: int = 0) -> dict[str, float]:
         """Returns the sparse probabilities from the job (typically only available from simulator devices)."""
 
     @overload
@@ -115,6 +121,10 @@ class Job:
         """The number of shots."""
 
     @property
+    def programs_num(self) -> int:
+        """The number of programs in the job."""
+
+    @property
     def queue_position(self) -> int | None:
         """The number of jobs ahead in the queue, or None if unavailable or not applicable in the current state."""
 
@@ -138,46 +148,94 @@ class Job:
 
         FAILED = 6
 
-class ProgramFormat(enum.Enum):
-    """Enumeration of program formats."""
+    class Result(enum.Enum):
+        """One raw job result format."""
 
-    QASM2 = 0
+        SHOTS = 0
 
-    QASM3 = 1
+        HIST_KEYS = 1
 
-    QIR_BASE_STRING = 2
+        HIST_VALUES = 2
 
-    QIR_BASE_MODULE = 3
+        STATEVECTOR_DENSE = 3
 
-    QIR_ADAPTIVE_STRING = 4
+        PROBABILITIES_DENSE = 4
 
-    QIR_ADAPTIVE_MODULE = 5
+        STATEVECTOR_SPARSE_KEYS = 5
 
-    CALIBRATION = 6
+        STATEVECTOR_SPARSE_VALUES = 6
 
-    QPY = 7
+        PROBABILITIES_SPARSE_KEYS = 7
 
-    IQM_JSON = 8
+        PROBABILITIES_SPARSE_VALUES = 8
 
-    BATCH_JOB = 9
+        PROGRAM_OUTPUT = 9
 
-    CUSTOM1 = 999999995
+class ProgramEncoding(enum.Enum):
+    """Program payload encoding."""
 
-    CUSTOM2 = 999999996
+    TEXT = 1
 
-    CUSTOM3 = 999999997
+    BINARY = 2
 
-    CUSTOM4 = 999999998
+class ProgramFormat:
+    """The exact format, version, profile, and encoding of a payload."""
 
-    CUSTOM5 = 999999999
+    def __init__(
+        self,
+        format_id: str,
+        version: tuple[int, int, int],
+        profile: str = "",
+        encoding: ProgramEncoding = ProgramEncoding.TEXT,
+    ) -> None: ...
+    @property
+    def format_id(self) -> str: ...
+    @property
+    def version(self) -> tuple[int, int, int]: ...
+    @property
+    def profile(self) -> str: ...
+    @property
+    def encoding(self) -> ProgramEncoding: ...
+    def __eq__(self, arg: object, /) -> bool: ...
+    def __hash__(self) -> int: ...
+
+    OPENQASM2: Final[ProgramFormat] = ...
+    """The canonical OpenQASM 2.0 text format."""
+
+    OPENQASM3: Final[ProgramFormat] = ...
+    """The canonical OpenQASM 3.0 text format."""
+
+    QIR21_BASE_TEXT: Final[ProgramFormat] = ...
+    """The canonical QIR 2.1 Base Profile text format."""
+
+    QIR21_BASE_BINARY: Final[ProgramFormat] = ...
+    """The canonical QIR 2.1 Base Profile binary format."""
+
+    QIR21_ADAPTIVE_TEXT: Final[ProgramFormat] = ...
+    """The canonical QIR 2.1 Adaptive Profile text format."""
+
+    QIR21_ADAPTIVE_BINARY: Final[ProgramFormat] = ...
+    """The canonical QIR 2.1 Adaptive Profile binary format."""
+
+class ProgramFeature:
+    """One exact feature or constraint record for a program format."""
+
+    @property
+    def id(self) -> str: ...
+    @property
+    def value(self) -> int: ...
+    @property
+    def constraint_id(self) -> str: ...
+    @property
+    def constraint_value(self) -> int: ...
+    def __eq__(self, arg: object, /) -> bool: ...
+    def __hash__(self) -> int: ...
 
 def is_binary_program_format(program_format: ProgramFormat) -> bool:
     """Returns whether a program format carries a binary payload.
 
-    ``QIR_BASE_MODULE``, ``QIR_ADAPTIVE_MODULE``, and ``QPY`` hold bitcode or
-    another serialized object. Such a payload may contain a null byte and is not
-    text, so the device must receive it as exact bytes. Pass ``bytes`` to
-    :meth:`Device.submit_job` for these formats and ``str`` for the others.
+    Binary payloads may contain null bytes. Pass ``bytes`` to
+    :meth:`Device.submit_job` for binary descriptors and ``str`` for text.
 
     Args:
         program_format: The program format to classify.
@@ -271,6 +329,9 @@ class Device:
     def supported_program_formats(self) -> list[ProgramFormat]:
         """Returns the list of program formats supported by the device."""
 
+    def try_program_features(self, program_format: ProgramFormat) -> list[ProgramFeature] | None:
+        """Returns the complete optional capability list for an exact payload, or None when the metadata is unknown."""
+
     def child_devices(self) -> list[Device]:
         """Returns the direct child devices managed by this device."""
 
@@ -332,9 +393,12 @@ class Device:
     ) -> Job:
         """Submits an exact byte payload to the device."""
 
-    def submit_calibration_job(
+    @overload
+    def submit_programs(
         self,
-        program: str | bytes | None = None,
+        programs: Sequence[str],
+        program_format: ProgramFormat,
+        num_shots: int,
         *,
         custom1: str | bool | float | None = None,
         custom2: str | bool | float | None = None,
@@ -342,13 +406,22 @@ class Device:
         custom4: str | bool | float | None = None,
         custom5: str | bool | float | None = None,
     ) -> Job:
-        """Triggers a calibration run on the device.
+        """Submits an ordered list of text programs atomically."""
 
-        QDMI does not require a program for a calibration run, so ``program`` is
-        optional and may be a string or bytes. When it is given, the device defines
-        what it means, which is usually a configuration for the run. A calibration run
-        executes no circuit, so it takes no shot count.
-        """
+    @overload
+    def submit_programs(
+        self,
+        programs: Sequence[bytes],
+        program_format: ProgramFormat,
+        num_shots: int,
+        *,
+        custom1: str | bool | float | None = None,
+        custom2: str | bool | float | None = None,
+        custom3: str | bool | float | None = None,
+        custom4: str | bool | float | None = None,
+        custom5: str | bool | float | None = None,
+    ) -> Job:
+        """Submits an ordered list of exact byte programs atomically."""
 
     def retrieve_job_by_id(self, job_id: str) -> Job:
         """Retrieves an existing job by its device-provided ID."""

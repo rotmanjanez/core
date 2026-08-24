@@ -28,9 +28,83 @@ from mqt.core.plugins.pennylane import (
     PennyLaneValidationError,
     QDMIDevice,
 )
+from mqt.core.plugins.pennylane.converter import _ProgramConverter  # ruff:ignore[import-private-name]
 from mqt.core.qdmi import ProgramFormat
 
 from .helpers import StubDevice, operation, patch_open_device
+
+_DYNAMIC_FEATURES = frozenset({
+    "mid-circuit-measurement",
+    "measured-qubit-reuse",
+    "measurement-result-use",
+    "boolean-computation",
+    "forward-branching",
+})
+
+
+def test_qasm3_emits_measurement_feedback_and_reset() -> None:
+    """Encode PennyLane's one-shot MCM bundle in the declared output bits."""
+    qdmi = StubDevice(
+        [operation("measure", 1), operation("reset", 1), operation("x", 1)],
+        [ProgramFormat.OPENQASM3],
+        program_features=tuple(_DYNAMIC_FEATURES),
+    )
+
+    def circuit():
+        measurement = qp.measure(0, reset=True)
+        qp.cond(measurement, qp.PauliX)(1)
+        return qp.sample(wires=[0, 1])
+
+    tape = qp.tape.make_qscript(circuit)()
+    converted = _ProgramConverter(
+        qdmi,  # ty: ignore[invalid-argument-type]
+        qp.wires.Wires([0, 1]),
+        ProgramFormat.OPENQASM3,
+        _DYNAMIC_FEATURES,
+    ).convert(tape)
+
+    assert "bit[3] c;" in converted.payload
+    assert "c[2] = measure q[0];\nreset q[0];" in converted.payload
+    assert "if (c[2] == 1) { x q[1]; }" in converted.payload
+    assert converted.mcm_slot_by_uid[tape.operations[0].meas_uid] == 2
+
+
+@pytest.mark.parametrize(
+    "operations",
+    [
+        [qp.ops.MidMeasure(qp.wires.Wires([0]), meas_uid="")],
+        [
+            qp.ops.MidMeasure(qp.wires.Wires([0]), meas_uid="same"),
+            qp.ops.MidMeasure(qp.wires.Wires([1]), meas_uid="same"),
+        ],
+    ],
+)
+def test_qasm3_rejects_invalid_mid_measurement_ids(operations: list[qp.operation.Operator]) -> None:
+    """Require stable, unique IDs for mid-circuit measurement results."""
+    qdmi = StubDevice([operation("measure", 1)], [ProgramFormat.OPENQASM3], program_features=tuple(_DYNAMIC_FEATURES))
+    converter = _ProgramConverter(
+        qdmi,  # ty: ignore[invalid-argument-type]
+        qp.wires.Wires([0, 1]),
+        ProgramFormat.OPENQASM3,
+        _DYNAMIC_FEATURES,
+    )
+
+    with pytest.raises(PennyLaneValidationError, match="unique nonempty measurement IDs"):
+        converter.convert(qp.tape.QuantumScript(operations))
+
+
+def test_qasm3_rejects_mid_measurement_without_payload_capabilities() -> None:
+    """Reject mid-circuit measurement unless the selected payload supports it."""
+    qdmi = StubDevice([operation("measure", 1)], [ProgramFormat.OPENQASM3])
+    converter = _ProgramConverter(
+        qdmi,  # ty: ignore[invalid-argument-type]
+        qp.wires.Wires([0]),
+        ProgramFormat.OPENQASM3,
+    )
+    tape = qp.tape.QuantumScript([qp.ops.MidMeasure(qp.wires.Wires([0]), meas_uid="measurement")])
+
+    with pytest.raises(PennyLaneUnsupportedOperationError, match="does not support mid-circuit measurement"):
+        converter.convert(tape)
 
 
 def test_qasm3_prefers_and_resolves_braket_spellings(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -42,7 +116,7 @@ def test_qasm3_prefers_and_resolves_braket_spellings(monkeypatch: pytest.MonkeyP
             operation("phaseshift", 1, 1),
             operation("xx", 2, 1),
         ],
-        [ProgramFormat.QASM2, ProgramFormat.QASM3],
+        [ProgramFormat.OPENQASM2, ProgramFormat.OPENQASM3],
         result_factory=lambda _program, shots: ["10"] * shots,
     )
     patch_open_device(monkeypatch, qdmi)
@@ -59,7 +133,7 @@ def test_qasm3_prefers_and_resolves_braket_spellings(monkeypatch: pytest.MonkeyP
     samples = circuit()
     payload, program_format, _shots, _parameters = qdmi.submissions[0]
 
-    assert program_format == ProgramFormat.QASM3
+    assert program_format == ProgramFormat.OPENQASM3
     assert payload == (
         "OPENQASM 3.0;\n"
         "qubit[2] q;\n"
@@ -68,7 +142,8 @@ def test_qasm3_prefers_and_resolves_braket_spellings(monkeypatch: pytest.MonkeyP
         "cnot q[0],q[1];\n"
         "phaseshift(0.25) q[1];\n"
         "xx(0.5) q[1],q[0];\n"
-        "c = measure q;\n"
+        "c[0] = measure q[0];\n"
+        "c[1] = measure q[1];\n"
     )
     assert "include" not in payload
     assert "gate " not in payload
@@ -93,7 +168,7 @@ def test_qasm3_resolves_ddsim_aliases_and_inverse_gates(monkeypatch: pytest.Monk
             operation("ryy", 2, 1),
             operation("rzz", 2, 1),
         ],
-        [ProgramFormat.QASM3],
+        [ProgramFormat.OPENQASM3],
     )
     patch_open_device(monkeypatch, qdmi)
     device = QDMIDevice("fake.qdmi", wires=2, shots=5)
@@ -129,7 +204,7 @@ def test_qasm3_failure_does_not_fall_back_to_qasm2(monkeypatch: pytest.MonkeyPat
     # PennyLane's OpenQASM 2 serializer spells U3 as `u3`, and the device
     # advertises it, so a fallback to OpenQASM 2 would silently succeed. The
     # OpenQASM 3 operation table has no U3 row, so the QASM3 path must fail.
-    qdmi = StubDevice([operation("u3", 1, 3)], [ProgramFormat.QASM3, ProgramFormat.QASM2])
+    qdmi = StubDevice([operation("u3", 1, 3)], [ProgramFormat.OPENQASM3, ProgramFormat.OPENQASM2])
     patch_open_device(monkeypatch, qdmi)
     device = QDMIDevice("fake.qdmi", wires=1, shots=4)
     tape = qp.tape.QuantumScript([qp.U3(0.1, 0.2, 0.3, wires=0)], [qp.sample(wires=0)], shots=4)
@@ -161,7 +236,7 @@ def test_qasm2_fallback_uses_pennylane_serializer(monkeypatch: pytest.MonkeyPatc
     """Use PennyLane's QASM2 serializer only when QASM3 is unavailable."""
     qdmi = StubDevice(
         [operation("h", 1), operation("cx", 2), operation("rx", 1, 1)],
-        [ProgramFormat.QASM2],
+        [ProgramFormat.OPENQASM2],
     )
     patch_open_device(monkeypatch, qdmi)
     device = QDMIDevice("fake.qdmi", wires=2, shots=10)
@@ -176,7 +251,7 @@ def test_qasm2_fallback_uses_pennylane_serializer(monkeypatch: pytest.MonkeyPatc
     circuit()
     payload, program_format, _shots, _parameters = qdmi.submissions[0]
 
-    assert program_format == ProgramFormat.QASM2
+    assert program_format == ProgramFormat.OPENQASM2
     assert payload == (
         "OPENQASM 2.0;\n"
         'include "qelib1.inc";\n'
@@ -192,7 +267,7 @@ def test_qasm2_fallback_uses_pennylane_serializer(monkeypatch: pytest.MonkeyPatc
 
 def test_qasm2_rejects_non_intersection_operation(monkeypatch: pytest.MonkeyPatch) -> None:
     """Reject an operation the serializer knows when the QDMI device does not."""
-    qdmi = StubDevice([operation("h", 1)], [ProgramFormat.QASM2])
+    qdmi = StubDevice([operation("h", 1)], [ProgramFormat.OPENQASM2])
     patch_open_device(monkeypatch, qdmi)
     device = QDMIDevice("fake.qdmi", wires=2, shots=2)
     tape = qp.tape.QuantumScript([qp.CNOT(wires=[0, 1])], [qp.sample(wires=[0, 1])], shots=2)
@@ -214,7 +289,7 @@ def test_qasm2_rejects_non_intersection_operation(monkeypatch: pytest.MonkeyPatc
 
 def test_qasm2_wraps_serializer_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     """Expose serializer failures as focused translation errors."""
-    qdmi = StubDevice([operation("h", 1)], [ProgramFormat.QASM2])
+    qdmi = StubDevice([operation("h", 1)], [ProgramFormat.OPENQASM2])
     patch_open_device(monkeypatch, qdmi)
     device = QDMIDevice("fake.qdmi", wires=1, shots=2)
 
@@ -236,7 +311,7 @@ def test_qasm2_wraps_serializer_errors(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.parametrize("parameter", [np.nan, np.inf, -np.inf])
 def test_rejects_non_finite_parameters(monkeypatch: pytest.MonkeyPatch, parameter: float) -> None:
     """Reject non-finite bound parameters before submission."""
-    qdmi = StubDevice([operation("rx", 1, 1)], [ProgramFormat.QASM3])
+    qdmi = StubDevice([operation("rx", 1, 1)], [ProgramFormat.OPENQASM3])
     patch_open_device(monkeypatch, qdmi)
     device = QDMIDevice("fake.qdmi", wires=1, shots=2)
 
@@ -254,7 +329,7 @@ def test_validates_operation_topology(monkeypatch: pytest.MonkeyPatch) -> None:
     """Honor operation-specific QDMI site pairs."""
     qdmi = StubDevice(
         [operation("cx", 2, site_pairs=[(0, 1)])],
-        [ProgramFormat.QASM3],
+        [ProgramFormat.OPENQASM3],
         qubits=3,
     )
     patch_open_device(monkeypatch, qdmi)
@@ -272,7 +347,7 @@ def test_validates_operation_topology(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_rejects_operation_on_an_unadvertised_site(monkeypatch: pytest.MonkeyPatch) -> None:
     """Honor the single-qubit sites a QDMI operation advertises."""
-    qdmi = StubDevice([operation("h", 1, sites=[0])], [ProgramFormat.QASM3])
+    qdmi = StubDevice([operation("h", 1, sites=[0])], [ProgramFormat.OPENQASM3])
     patch_open_device(monkeypatch, qdmi)
     device = QDMIDevice("fake.qdmi", wires=2, shots=2)
 
@@ -291,7 +366,7 @@ def test_falls_back_to_the_device_coupling_map(monkeypatch: pytest.MonkeyPatch) 
     """Use the device topology when an operation advertises no site pairs."""
     qdmi = StubDevice(
         [operation("h", 1), operation("cx", 2)],
-        [ProgramFormat.QASM3],
+        [ProgramFormat.OPENQASM3],
         qubits=3,
         coupling_map=[(0, 1)],
         result_factory=lambda _program, shots: ["000"] * shots,
@@ -321,7 +396,7 @@ def test_accepts_advertised_site_pairs_and_wider_operations(monkeypatch: pytest.
     """Accept an advertised site pair, and skip loci checks above two wires."""
     qdmi = StubDevice(
         [operation("h", 1), operation("cx", 2, site_pairs=[(0, 1)]), operation("ccx", 3)],
-        [ProgramFormat.QASM3],
+        [ProgramFormat.OPENQASM3],
         qubits=3,
         result_factory=lambda _program, shots: ["000"] * shots,
     )
@@ -352,7 +427,7 @@ def test_rejects_contradictory_qdmi_metadata(
     monkeypatch: pytest.MonkeyPatch, advertised: object, expected: str
 ) -> None:
     """Reject a QDMI operation whose arity contradicts the operation table."""
-    qdmi = StubDevice([advertised], [ProgramFormat.QASM3])  # ty: ignore[invalid-argument-type]
+    qdmi = StubDevice([advertised], [ProgramFormat.OPENQASM3])  # ty: ignore[invalid-argument-type]
     patch_open_device(monkeypatch, qdmi)
     device = QDMIDevice("fake.qdmi", wires=1, shots=2)
 
@@ -370,7 +445,7 @@ def test_measurement_without_wires_samples_every_device_wire(monkeypatch: pytest
     """Sample every device wire when the measurement names none."""
     qdmi = StubDevice(
         [operation("x", 1)],
-        [ProgramFormat.QASM3],
+        [ProgramFormat.OPENQASM3],
         result_factory=lambda _program, shots: ["10"] * shots,
     )
     patch_open_device(monkeypatch, qdmi)
@@ -391,7 +466,7 @@ def test_converts_an_unpreprocessed_tape(monkeypatch: pytest.MonkeyPatch) -> Non
     """Convert a tape handed straight to the device, without preprocessing."""
     qdmi = StubDevice(
         [operation("h", 1)],
-        [ProgramFormat.QASM3],
+        [ProgramFormat.OPENQASM3],
         result_factory=lambda _program, shots: ["00"] * shots,
     )
     patch_open_device(monkeypatch, qdmi)

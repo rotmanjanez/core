@@ -108,7 +108,7 @@ class QDMIJob(JobV1):
 
             # Get counts if successful and not cached
             if self._counts_cache[idx] is None and success:
-                self._counts_cache[idx] = job.get_counts()
+                self._counts_cache[idx] = self._backend._decode_counts(job)  # ruff:ignore[private-member-access]
 
             exp_result = ExperimentResult.from_dict({
                 "success": success,

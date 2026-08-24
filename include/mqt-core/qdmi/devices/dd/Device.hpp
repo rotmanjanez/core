@@ -17,6 +17,7 @@
 #include "dd/DDDefinitions.hpp"
 #include "dd/Package.hpp"
 #include "mqt_ddsim_qdmi/device.h"
+#include "qdmi/ProgramFormat.hpp"
 #include "qdmi/common/Common.hpp"
 
 #include <atomic>
@@ -155,6 +156,10 @@ public:
   auto queryDeviceProperty(QDMI_Device_Property prop, size_t size, void* value,
                            size_t* sizeRet) const -> QDMI_STATUS;
 
+  auto queryProgramFeatures(const QDMI_Program_Format& format, size_t size,
+                            QDMI_Program_Feature* value, size_t* sizeRet) const
+      -> QDMI_STATUS;
+
   /**
    * @brief Forwards a query of a site property to the site.
    * @see MQT_DDSIM_QDMI_device_session_query_site_property
@@ -190,13 +195,19 @@ private:
   std::atomic<QDMI_Job_Status> status_{QDMI_JOB_STATUS_CREATED};
 
   /// The program format
-  QDMI_Program_Format format_ = QDMI_PROGRAM_FORMAT_QASM3;
+  QDMI_Program_Format format_ = qdmi::OPENQASM3;
+
+  /// Whether the program format has been set.
+  bool hasFormat_ = false;
 
   /// The quantum program associated with the job.
   /// Text formats (QASM2/3, QIR Base/Adaptive String) are stored as
   /// @c std::string; binary formats (QIR Base/Adaptive Module) are stored as
   /// @c std::vector<std::byte>.
   std::variant<std::string, std::vector<std::byte>> program_;
+
+  /// Whether the program payload has been set.
+  bool hasProgram_ = false;
 
   /// The number of shots for the job
   size_t numShots_ = 1024U;
@@ -206,6 +217,9 @@ private:
 
   /// The measurement counts for the job
   std::map<std::string, std::size_t> counts_;
+
+  /// The format-defined program output stream.
+  std::string programOutput_;
 
   /// The DD package used for the state vector simulation
   std::unique_ptr<dd::Package> dd_;
@@ -287,21 +301,14 @@ public:
    */
   auto free() -> void;
 
-  /**
-   * @brief Sets a parameter for the job.
-   * @note When setting @c QDMI_DEVICE_JOB_PARAMETER_PROGRAM, the device uses
-   * the current @c QDMI_DEVICE_JOB_PARAMETER_PROGRAMFORMAT to decide whether
-   * the payload's wire @p size:
-   * - includes a trailing @c '\0' (text formats: QASM2, QASM3,
-   *   QIR Base/Adaptive String) or
-   * - is the exact byte count (binary formats: QIR Base/Adaptive Module).
-   * Callers should therefore set @c PROGRAMFORMAT before @c PROGRAM.
-   * The default of @c QDMI_PROGRAM_FORMAT_QASM3 is assumed if @c PROGRAMFORMAT
-   * is not set.
-   * @see MQT_DDSIM_QDMI_device_job_set_parameter
-   */
+  /// @see MQT_DDSIM_QDMI_device_job_set_parameter
   auto setParameter(QDMI_Device_Job_Parameter param, size_t size,
                     const void* value) -> QDMI_STATUS;
+
+  /// @see MQT_DDSIM_QDMI_device_job_set_programs
+  auto setPrograms(const QDMI_Program_Format* format, size_t count,
+                   const size_t* sizes, const void* const* programs)
+      -> QDMI_STATUS;
 
   /**
    * @brief Queries a property of the job.
@@ -338,6 +345,6 @@ public:
    * @brief Gets the results of the job.
    * @see MQT_DDSIM_QDMI_device_job_get_results
    */
-  auto getResults(QDMI_Job_Result result, size_t size, void* data,
-                  size_t* sizeRet) -> QDMI_STATUS;
+  auto getResults(size_t programIndex, QDMI_Job_Result result, size_t size,
+                  void* data, size_t* sizeRet) -> QDMI_STATUS;
 };

@@ -28,7 +28,7 @@
 TEST(ResultsStatevector, DenseNormalizedAndBufferTooSmall) {
   const qdmi_test::SessionGuard s{};
   const qdmi_test::JobGuard j{s.session};
-  ASSERT_EQ(qdmi_test::setProgram(j.job, QDMI_PROGRAM_FORMAT_QASM3,
+  ASSERT_EQ(qdmi_test::setProgram(j.job, qdmi_test::OPENQASM3,
                                   qdmi_test::QASM3_BELL_STATE),
             QDMI_SUCCESS);
   ASSERT_EQ(qdmi_test::setShots(j.job, 0), QDMI_SUCCESS);
@@ -47,7 +47,7 @@ TEST(ResultsStatevector, DenseNormalizedAndBufferTooSmall) {
   if (sz > 0) {
     std::vector<char> tooSmall(sz - 1);
     EXPECT_EQ(MQT_DDSIM_QDMI_device_job_get_results(
-                  j.job, QDMI_JOB_RESULT_STATEVECTOR_DENSE, tooSmall.size(),
+                  j.job, 0U, QDMI_JOB_RESULT_STATEVECTOR_DENSE, tooSmall.size(),
                   tooSmall.data(), nullptr),
               QDMI_ERROR_INVALIDARGUMENT);
   }
@@ -56,7 +56,7 @@ TEST(ResultsStatevector, DenseNormalizedAndBufferTooSmall) {
 TEST(ResultsStatevector, SparseNormalizedAndBufferTooSmall) {
   const qdmi_test::SessionGuard s{};
   const qdmi_test::JobGuard j{s.session};
-  ASSERT_EQ(qdmi_test::setProgram(j.job, QDMI_PROGRAM_FORMAT_QASM3,
+  ASSERT_EQ(qdmi_test::setProgram(j.job, qdmi_test::OPENQASM3,
                                   qdmi_test::QASM3_BELL_STATE),
             QDMI_SUCCESS);
   ASSERT_EQ(qdmi_test::setShots(j.job, 0), QDMI_SUCCESS);
@@ -75,7 +75,7 @@ TEST(ResultsStatevector, SparseNormalizedAndBufferTooSmall) {
   if (ksz > 0) {
     std::vector<char> tooSmall(ksz - 1);
     EXPECT_EQ(MQT_DDSIM_QDMI_device_job_get_results(
-                  j.job, QDMI_JOB_RESULT_STATEVECTOR_SPARSE_KEYS,
+                  j.job, 0U, QDMI_JOB_RESULT_STATEVECTOR_SPARSE_KEYS,
                   tooSmall.size(), tooSmall.data(), nullptr),
               QDMI_ERROR_INVALIDARGUMENT);
   }
@@ -84,7 +84,7 @@ TEST(ResultsStatevector, SparseNormalizedAndBufferTooSmall) {
   if (vsz > 0) {
     std::vector<char> tooSmall(vsz - 1);
     EXPECT_EQ(MQT_DDSIM_QDMI_device_job_get_results(
-                  j.job, QDMI_JOB_RESULT_STATEVECTOR_SPARSE_VALUES,
+                  j.job, 0U, QDMI_JOB_RESULT_STATEVECTOR_SPARSE_VALUES,
                   tooSmall.size(), tooSmall.data(), nullptr),
               QDMI_ERROR_INVALIDARGUMENT);
   }
@@ -93,17 +93,17 @@ TEST(ResultsStatevector, SparseNormalizedAndBufferTooSmall) {
 TEST(ResultsStatevector, HistogramRequestsInvalidWithShotsZero) {
   const qdmi_test::SessionGuard s{};
   const qdmi_test::JobGuard j{s.session};
-  ASSERT_EQ(qdmi_test::setProgram(j.job, QDMI_PROGRAM_FORMAT_QASM3,
+  ASSERT_EQ(qdmi_test::setProgram(j.job, qdmi_test::OPENQASM3,
                                   qdmi_test::QASM3_BELL_STATE),
             QDMI_SUCCESS);
   ASSERT_EQ(qdmi_test::setShots(j.job, 0), QDMI_SUCCESS);
   ASSERT_EQ(qdmi_test::submitAndWait(j.job, 0), QDMI_SUCCESS);
 
   EXPECT_EQ(MQT_DDSIM_QDMI_device_job_get_results(
-                j.job, QDMI_JOB_RESULT_HIST_KEYS, 0, nullptr, nullptr),
+                j.job, 0U, QDMI_JOB_RESULT_HIST_KEYS, 0, nullptr, nullptr),
             QDMI_ERROR_INVALIDARGUMENT);
   EXPECT_EQ(MQT_DDSIM_QDMI_device_job_get_results(
-                j.job, QDMI_JOB_RESULT_HIST_VALUES, 0, nullptr, nullptr),
+                j.job, 0U, QDMI_JOB_RESULT_HIST_VALUES, 0, nullptr, nullptr),
             QDMI_ERROR_INVALIDARGUMENT);
 }
 
@@ -111,9 +111,8 @@ TEST(ResultsStatevector, QIRBaseStringYieldsBellState) {
   const qdmi_test::SessionGuard s{};
   const qdmi_test::JobGuard j{s.session};
   const auto program = qir_test::getProgram("BellPairStatic.ll");
-  ASSERT_EQ(
-      qdmi_test::setProgram(j.job, QDMI_PROGRAM_FORMAT_QIRBASESTRING, program),
-      QDMI_SUCCESS);
+  ASSERT_EQ(qdmi_test::setProgram(j.job, qdmi_test::QIR21_BASE_TEXT, program),
+            QDMI_SUCCESS);
   ASSERT_EQ(qdmi_test::setShots(j.job, 0), QDMI_SUCCESS);
   ASSERT_EQ(qdmi_test::submitAndWait(j.job, 0), QDMI_SUCCESS);
 

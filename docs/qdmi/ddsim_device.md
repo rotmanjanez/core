@@ -37,10 +37,9 @@ The device implements the full QDMI job interface (except for the
 
 ## Compile and execute QIR
 
-QDMI v1.3 cannot report the DDSIM device's all-to-all topology. State this
-temporary topology workaround and an explicit DDSIM synthesis basis when
-compiling a program to QIR. QDMI v1.4 will remove the topology workaround.
-Submit the resulting bitcode to the same device:
+The DDSIM QDMI device does not report a finite coupling map for its all-to-all
+topology. State that topology and an explicit DDSIM synthesis basis when
+compiling a program to QIR. Submit the resulting bitcode to the same device:
 
 ```python
 from mqt.core.mlir import (
@@ -73,7 +72,7 @@ program = compile_program(
 
 job = device.submit_job(
     program.to_bitcode(),
-    ProgramFormat.QIR_BASE_MODULE,
+    ProgramFormat.QIR21_BASE_BINARY,
     num_shots=1024,
 )
 job.wait()
