@@ -576,9 +576,6 @@ public:
   [[nodiscard]] std::optional<std::vector<std::pair<Site, Site>>>
   getCouplingMap() const;
 
-  /// @see QDMI_DEVICE_PROPERTY_NEEDSCALIBRATION
-  [[nodiscard]] std::optional<size_t> getNeedsCalibration() const;
-
   /// @see QDMI_DEVICE_PROPERTY_QUEUELENGTH
   [[nodiscard]] std::optional<size_t> getQueueLength() const;
 

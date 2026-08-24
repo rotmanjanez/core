@@ -171,14 +171,6 @@ def test_device_coupling_map(device: Device) -> None:
         assert all(isinstance(site, Device.Site) for pair in cm for site in pair)
 
 
-def test_device_needs_calibration(device: Device) -> None:
-    """Test that the optional calibration age is a non-negative integer."""
-    needs_calibration = device.needs_calibration()
-    if needs_calibration is not None:
-        assert isinstance(needs_calibration, int)
-        assert needs_calibration >= 0
-
-
 def test_device_queue_length(device: Device) -> None:
     """Test that the optional device queue length is a non-negative integer."""
     queue_length = device.queue_length()

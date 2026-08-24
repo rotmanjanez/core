@@ -46,11 +46,19 @@ members with exact descriptors. The standard descriptors include `OPENQASM2`,
 `OPENQASM3`, `QIR21_BASE_TEXT`, `QIR21_BASE_BINARY`, `QIR21_ADAPTIVE_TEXT`, and
 `QIR21_ADAPTIVE_BINARY`.
 
-QDMI 1.4 removes the calibration pseudo-format. MQT Core therefore removes
-`submit_calibration_job` and its C++ equivalent. The `needs_calibration` and
-`getNeedsCalibration` device-state queries remain available. Device
-implementations can advertise a vendor-defined calibration payload descriptor
-when calibration is a program contract.
+QDMI 1.4 removes the calibration pseudo-format,
+`QDMI_DEVICE_PROPERTY_NEEDSCALIBRATION`, `QDMI_DEVICE_PROPERTY_PULSESUPPORT`,
+and `QDMI_Device_Pulse_Support_Level`. MQT Core therefore removes
+`submit_calibration_job`, its C++ equivalent, `needs_calibration`, and
+`Device::getNeedsCalibration`. The bundled devices no longer advertise pulse
+support. Use `QDMI_DEVICE_STATUS_CALIBRATION` to report a device that is
+currently calibrating. Use a vendor-defined extension or an out-of-band service
+for proprietary calibration state and control.
+
+Removing the two device properties renumbers all later regular
+`QDMI_Device_Property` values. Rebuild every QDMI 1.4 client, driver, and device
+from the same final headers. Do not mix binaries built from the interim QDMI
+pull request 511 or 512 headers with the final QDMI 1.4 interface.
 
 Use `submit_programs` or `Device::submitPrograms` to submit an ordered list in
 one job. `Job.programs_num` reports the list size. All result methods accept an

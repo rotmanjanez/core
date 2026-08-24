@@ -371,8 +371,6 @@ TEST(QDMITest, DevicePropertyToString) {
   EXPECT_STREQ(qdmi::toString(QDMI_DEVICE_PROPERTY_OPERATIONS), "OPERATIONS");
   EXPECT_STREQ(qdmi::toString(QDMI_DEVICE_PROPERTY_COUPLINGMAP),
                "COUPLING MAP");
-  EXPECT_STREQ(qdmi::toString(QDMI_DEVICE_PROPERTY_NEEDSCALIBRATION),
-               "NEEDS CALIBRATION");
   EXPECT_STREQ(qdmi::toString(QDMI_DEVICE_PROPERTY_LENGTHUNIT), "LENGTH UNIT");
   EXPECT_STREQ(qdmi::toString(QDMI_DEVICE_PROPERTY_LENGTHSCALEFACTOR),
                "LENGTH SCALE FACTOR");
@@ -404,8 +402,6 @@ TEST(QDMITest, DevicePropertyCustomRange) {
 
   EXPECT_STREQ(qdmi::toString(interiorCustom), "CUSTOM");
   EXPECT_STREQ(qdmi::toString(QDMI_DEVICE_PROPERTY_CUSTOM_MAX), "CUSTOM");
-  EXPECT_FALSE(IS_INVALID_ARGUMENT(QDMI_DEVICE_PROPERTY_NEEDSCALIBRATION,
-                                   QDMI_DEVICE_PROPERTY));
   EXPECT_FALSE(IS_INVALID_ARGUMENT(interiorCustom, QDMI_DEVICE_PROPERTY));
   EXPECT_FALSE(IS_INVALID_ARGUMENT(QDMI_DEVICE_PROPERTY_CUSTOM_MAX,
                                    QDMI_DEVICE_PROPERTY));
@@ -482,10 +478,6 @@ TEST_P(DeviceTest, Sites) {
 
 TEST_P(DeviceTest, CouplingMap) {
   EXPECT_NO_THROW(std::ignore = device.getCouplingMap());
-}
-
-TEST_P(DeviceTest, NeedsCalibration) {
-  EXPECT_NO_THROW(std::ignore = device.getNeedsCalibration());
 }
 
 TEST_F(DDSimulatorDeviceTest, QueueLengthIsUnavailable) {
