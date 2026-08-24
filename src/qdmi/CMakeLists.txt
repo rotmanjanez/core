@@ -25,6 +25,7 @@ if(NOT TARGET ${TARGET_NAME})
            ${MQT_CORE_INCLUDE_BUILD_DIR}
            FILES
            ${MQT_CORE_INCLUDE_BUILD_DIR}/qdmi/Client.hpp
+           ${MQT_CORE_INCLUDE_BUILD_DIR}/qdmi/ProgramFormat.hpp
            ${MQT_CORE_INCLUDE_BUILD_DIR}/qdmi/Slurm.hpp)
 
   target_link_libraries(
