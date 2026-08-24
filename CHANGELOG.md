@@ -33,7 +33,8 @@ releases may include breaking changes.
   programs ([#1915], [#1973]) ([**@simon1hofmann**])
 - ✨ Add immutable MLIR compiler targets, QDMI device integration, and target
   compilation through C++, Python, and `mqt-cc` ([#1687], [#1993], [#1999],
-  [#2049]) ([**@MatthiasReumann**], [**@simon1hofmann**], [**@burgholzer**])
+  [#2049], [#2227]) ([**@MatthiasReumann**], [**@simon1hofmann**],
+  [**@burgholzer**])
 
 #### Import and export
 
@@ -831,6 +832,7 @@ for previous changelogs._
 
 <!-- PR links -->
 
+[#2227]: https://github.com/munich-quantum-toolkit/core/pull/2227
 [#2226]: https://github.com/munich-quantum-toolkit/core/pull/2226
 [#2219]: https://github.com/munich-quantum-toolkit/core/pull/2219
 [#2215]: https://github.com/munich-quantum-toolkit/core/pull/2215

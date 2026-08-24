@@ -44,9 +44,6 @@ compiling a program to QIR. Submit the resulting bitcode to the same device:
 ```python
 from mqt.core.mlir import (
     CompilerTarget,
-    PayloadFormat,
-    PayloadEncoding,
-    PayloadSpecification,
     TargetEnvironment,
     compile_program,
 )
@@ -64,7 +61,10 @@ target = CompilerTarget(
         CompilerTarget.Operation("reset", 1, 0),
     ]),
 )
-payload = PayloadSpecification(PayloadFormat("qir", "2.1.0", "base", PayloadEncoding.BINARY))
+payload = TargetEnvironment.from_device(
+    device,
+    ProgramFormat.QIR21_BASE_BINARY,
+).payload_specification
 program = compile_program(
     "bell.qasm",
     target_environment=TargetEnvironment(target, payload),
