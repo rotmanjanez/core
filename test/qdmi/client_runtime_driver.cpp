@@ -14,6 +14,7 @@
 
 #ifdef TEST_FULL_CLIENT
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
@@ -51,6 +52,14 @@ struct QDMI_Session_impl_d {
 namespace {
 constexpr auto DEVICE_ID = "test.fake.client";
 constexpr auto FAIL_ALLOCATION = "MQT_CORE_QDMI_FAKE_FAIL_ALLOCATION";
+constexpr QDMI_Program_Format OPENQASM3{.version = QDMI_MAKE_VERSION(3, 0, 0),
+                                        .encoding = QDMI_PROGRAM_ENCODING_TEXT,
+                                        .id = "openqasm",
+                                        .profile = ""};
+
+[[nodiscard]] auto isAdapterTest(const std::string_view token) -> bool {
+  return token.starts_with("adapter-");
+}
 
 [[nodiscard]] auto failAllocation() -> bool {
   const auto* value = std::getenv(FAIL_ALLOCATION);
@@ -83,21 +92,30 @@ auto queryString(const std::string_view result, const size_t size, void* value,
   return QDMI_SUCCESS;
 }
 
-template <class T>
-auto queryValue(const T& result, const size_t size, void* value,
-                size_t* sizeRet) -> int {
+template <class T, size_t Extent>
+auto queryValues(const std::span<const T, Extent> result, const size_t size,
+                 void* value, size_t* sizeRet) -> int {
+  const auto required = result.size_bytes();
   if (sizeRet != nullptr) {
-    *sizeRet = sizeof(T);
+    *sizeRet = required;
   }
   if (value == nullptr) {
     return QDMI_SUCCESS;
   }
-  if (size < sizeof(T)) {
+  if (size < required) {
     return QDMI_ERROR_INVALIDARGUMENT;
   }
-  std::memcpy(value, static_cast<const void*>(std::addressof(result)),
-              sizeof(T));
+  if (!result.empty()) {
+    std::memcpy(value, static_cast<const void*>(result.data()), required);
+  }
   return QDMI_SUCCESS;
+}
+
+template <class T>
+auto queryValue(const T& result, const size_t size, void* value,
+                size_t* sizeRet) -> int {
+  return queryValues(std::span<const T>{std::addressof(result), 1U}, size,
+                     value, sizeRet);
 }
 } // namespace
 #endif
@@ -212,6 +230,10 @@ int QDMI_device_query_device_property(QDMI_Device device,
     return queryValue(site, size, value, sizeRet);
   }
   if (prop == QDMI_DEVICE_PROPERTY_OPERATIONS) {
+    if (isAdapterTest(device->session->token)) {
+      return queryValues(std::span<const QDMI_Operation>{}, size, value,
+                         sizeRet);
+    }
     QDMI_Operation operation = &device->operation;
     return queryValue(operation, size, value, sizeRet);
   }
@@ -224,6 +246,10 @@ int QDMI_device_query_device_property(QDMI_Device device,
     std::ranges::fill(format.id, 'x');
     return queryValue(format, size, value, sizeRet);
   }
+  if (prop == QDMI_DEVICE_PROPERTY_SUPPORTEDPROGRAMFORMATS &&
+      isAdapterTest(device->session->token)) {
+    return queryValue(OPENQASM3, size, value, sizeRet);
+  }
   return QDMI_ERROR_NOTSUPPORTED;
 }
 
@@ -232,10 +258,71 @@ int QDMI_device_query_program_features(QDMI_Device device,
                                        const size_t size,
                                        QDMI_Program_Feature* value,
                                        size_t* sizeRet) {
-  if (device != nullptr && device->session->token == "malformed-feature") {
+  if (device == nullptr || device->session == nullptr ||
+      !device->session->initialized) {
+    return QDMI_ERROR_INVALIDARGUMENT;
+  }
+  const auto& token = device->session->token;
+  if (token == "malformed-feature") {
     QDMI_Program_Feature feature{};
     std::ranges::fill(feature.id, 'x');
     return queryValue(feature, size, value, sizeRet);
+  }
+  if (token == "adapter-feature-groups") {
+    constexpr std::array features{
+        QDMI_Program_Feature{
+            .id = QDMI_PROGRAM_FEATURE_COUNTED_ITERATION,
+            .value = 0U,
+            .constraint_id =
+                QDMI_PROGRAM_CONSTRAINT_MAX_CONTROL_FLOW_NESTING_DEPTH,
+            .constraint_value = 3U},
+        QDMI_Program_Feature{.id = QDMI_PROGRAM_FEATURE_COUNTED_ITERATION,
+                             .value = 0U,
+                             .constraint_id =
+                                 QDMI_PROGRAM_CONSTRAINT_MAX_ITERATION_COUNT,
+                             .constraint_value = 100U}};
+    return queryValues(std::span{features}, size, value, sizeRet);
+  }
+  if (token == "adapter-invalid-record") {
+    constexpr QDMI_Program_Feature feature{
+        .id = QDMI_PROGRAM_FEATURE_COUNTED_ITERATION,
+        .value = 0U,
+        .constraint_id = "",
+        .constraint_value = 1U};
+    return queryValue(feature, size, value, sizeRet);
+  }
+  if (token == "adapter-duplicate-unrestricted") {
+    constexpr std::array features{
+        QDMI_Program_Feature QDMI_PROGRAM_FEATURE_UNCONSTRAINED(
+            QDMI_PROGRAM_FEATURE_COUNTED_ITERATION, 0U),
+        QDMI_Program_Feature QDMI_PROGRAM_FEATURE_UNCONSTRAINED(
+            QDMI_PROGRAM_FEATURE_COUNTED_ITERATION, 0U)};
+    return queryValues(std::span{features}, size, value, sizeRet);
+  }
+  if (token == "adapter-mixed-group") {
+    constexpr std::array features{
+        QDMI_Program_Feature QDMI_PROGRAM_FEATURE_UNCONSTRAINED(
+            QDMI_PROGRAM_FEATURE_COUNTED_ITERATION, 0U),
+        QDMI_Program_Feature{.id = QDMI_PROGRAM_FEATURE_COUNTED_ITERATION,
+                             .value = 0U,
+                             .constraint_id =
+                                 QDMI_PROGRAM_CONSTRAINT_MAX_ITERATION_COUNT,
+                             .constraint_value = 10U}};
+    return queryValues(std::span{features}, size, value, sizeRet);
+  }
+  if (token == "adapter-duplicate-constraint") {
+    constexpr std::array features{
+        QDMI_Program_Feature{.id = QDMI_PROGRAM_FEATURE_COUNTED_ITERATION,
+                             .value = 0U,
+                             .constraint_id =
+                                 QDMI_PROGRAM_CONSTRAINT_MAX_ITERATION_COUNT,
+                             .constraint_value = 10U},
+        QDMI_Program_Feature{.id = QDMI_PROGRAM_FEATURE_COUNTED_ITERATION,
+                             .value = 0U,
+                             .constraint_id =
+                                 QDMI_PROGRAM_CONSTRAINT_MAX_ITERATION_COUNT,
+                             .constraint_value = 20U}};
+    return queryValues(std::span{features}, size, value, sizeRet);
   }
   return QDMI_ERROR_NOTSUPPORTED;
 }
@@ -255,8 +342,8 @@ int QDMI_device_query_site_property(QDMI_Device device, QDMI_Site site,
 
 int QDMI_device_query_operation_property(
     QDMI_Device device, QDMI_Operation operation, size_t, const QDMI_Site*,
-    size_t, const double*, const QDMI_Operation_Property prop,
-    const size_t size, void* value, size_t* sizeRet) {
+    size_t, const double*, const QDMI_Operation_Property prop, const size_t,
+    void* value, size_t* sizeRet) {
   if (device == nullptr || operation != &device->operation) {
     return QDMI_ERROR_INVALIDARGUMENT;
   }

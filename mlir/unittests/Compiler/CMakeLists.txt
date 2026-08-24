@@ -42,3 +42,15 @@ mqt_mlir_configure_unittest_target(mqt-core-mlir-unittests-compiler REQUIRES_EH)
 
 gtest_discover_tests(mqt-core-mlir-unittests-compiler PROPERTIES LABELS mqt-mlir-unittests
                                                                  DISCOVERY_TIMEOUT 60)
+
+add_executable(mqt-core-mlir-unittests-compiler-qdmi-client test_compiler_qdmi_adapter_client.cpp)
+target_link_libraries(mqt-core-mlir-unittests-compiler-qdmi-client PRIVATE GTest::gtest_main
+                                                                           MQTCompilerQDMIAdapter)
+target_compile_definitions(
+  mqt-core-mlir-unittests-compiler-qdmi-client
+  PRIVATE "MQT_CORE_MLIR_QDMI_TEST_DRIVER=\"$<TARGET_FILE:mqt-core-qdmi-fake-client>\"")
+add_dependencies(mqt-core-mlir-unittests-compiler-qdmi-client mqt-core-qdmi-fake-client)
+mqt_copy_qdmi_runtime(mqt-core-mlir-unittests-compiler-qdmi-client MQT::CoreQDMI_DDSIM_Device)
+mqt_mlir_configure_unittest_target(mqt-core-mlir-unittests-compiler-qdmi-client REQUIRES_EH)
+gtest_discover_tests(mqt-core-mlir-unittests-compiler-qdmi-client
+                     PROPERTIES LABELS mqt-mlir-unittests DISCOVERY_TIMEOUT 60)

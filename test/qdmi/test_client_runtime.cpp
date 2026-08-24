@@ -10,6 +10,7 @@
 
 #include "TestUtils.hpp"
 #include "qdmi/Client.hpp"
+#include "qdmi/ProgramFormat.hpp"
 
 #include <gmock/gmock-matchers.h>
 #include <gtest/gtest.h>
