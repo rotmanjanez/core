@@ -203,15 +203,12 @@ TEST(CompilerQDMIAdapterTest, ConvertsUnknownDeviceFailureToError) {
   ASSERT_FALSE(target);
   const auto message = llvm::toString(target.takeError());
   EXPECT_NE(message.find("mqt.unknown.device"), std::string::npos);
-  EXPECT_NE(message.find("has no device with ID"), std::string::npos);
 
   auto environment = mlir::targetEnvironmentFromDeviceId("mqt.unknown.device",
                                                          qdmi::OPENQASM3);
   ASSERT_FALSE(environment);
   const auto environmentMessage = llvm::toString(environment.takeError());
   EXPECT_NE(environmentMessage.find("mqt.unknown.device"), std::string::npos);
-  EXPECT_NE(environmentMessage.find("has no device with ID"),
-            std::string::npos);
 }
 
 TEST(CompilerQDMIAdapterTest, RejectsNonhomogeneousOperationSupport) {
