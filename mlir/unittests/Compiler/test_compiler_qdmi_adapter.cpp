@@ -13,7 +13,6 @@
 #include "mlir/Compiler/TargetEnvironment.h"
 #include "qdmi/Client.hpp"
 #include "qdmi/ProgramFormat.hpp"
-#include "qdmi/driver/Driver.hpp"
 
 #include <gtest/gtest.h>
 #include <llvm/ADT/ArrayRef.h>
@@ -22,9 +21,13 @@
 #include <llvm/Support/Error.h>
 #include <qdmi/constants.h>
 #include <qdmi/device.h>
+/// POSIX declares setenv in <stdlib.h>.
+/// NOLINTNEXTLINE(modernize-deprecated-headers)
+#include <stdlib.h>
 
 #include <cassert>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <optional>
@@ -166,6 +169,26 @@ protected:
 };
 
 } /* namespace */
+
+namespace {
+struct ConfiguredClientEnvironment {
+  ConfiguredClientEnvironment() noexcept {
+#ifdef _WIN32
+    if (_putenv_s("MQT_CORE_QDMI_CONFIG_FILE",
+                  MQT_CORE_MLIR_QDMI_TEST_CONFIG) != 0) {
+      std::abort();
+    }
+#else
+    if (setenv("MQT_CORE_QDMI_CONFIG_FILE", MQT_CORE_MLIR_QDMI_TEST_CONFIG,
+               1) != 0) {
+      std::abort();
+    }
+#endif
+  }
+};
+
+const ConfiguredClientEnvironment CONFIGURED_CLIENT_ENVIRONMENT;
+} // namespace
 
 [[nodiscard]] static const mlir::ProgramCapability&
 findCapability(const mlir::PayloadSpecification& payload,
@@ -388,22 +411,19 @@ TEST(CompilerQDMIAdapterTest, ConvertsUnknownDeviceFailureToError) {
   ASSERT_FALSE(target);
   const auto message = llvm::toString(target.takeError());
   EXPECT_NE(message.find("mqt.unknown.device"), std::string::npos);
-  EXPECT_NE(message.find("Unknown QDMI device ID"), std::string::npos);
+  EXPECT_NE(message.find("has no device with ID"), std::string::npos);
 
   auto environment = mlir::targetEnvironmentFromDeviceId("mqt.unknown.device",
                                                          qdmi::OPENQASM3);
   ASSERT_FALSE(environment);
   const auto environmentMessage = llvm::toString(environment.takeError());
   EXPECT_NE(environmentMessage.find("mqt.unknown.device"), std::string::npos);
-  EXPECT_NE(environmentMessage.find("Unknown QDMI device ID"),
+  EXPECT_NE(environmentMessage.find("has no device with ID"),
             std::string::npos);
 }
 
 TEST(CompilerQDMIAdapterTest, RejectsNonhomogeneousOperationSupport) {
-  qdmi::DeviceSessionConfig overrides;
-  overrides.deviceConfiguration =
-      qdmi::FileDeviceConfiguration{MQT_CORE_MLIR_HETEROGENEOUS_SC_CONFIG};
-  const auto device = qdmi::Session::openDevice("mqt.sc.default", overrides);
+  const auto device = qdmi::Session::openDevice("test.mlir.heterogeneous");
   auto environment = mlir::targetEnvironmentFromDevice(device, qdmi::OPENQASM3);
   ASSERT_FALSE(environment);
   const auto message = llvm::toString(environment.takeError());
@@ -412,10 +432,8 @@ TEST(CompilerQDMIAdapterTest, RejectsNonhomogeneousOperationSupport) {
 }
 
 TEST(CompilerQDMIAdapterTest, RejectsDirectionalOperationWithoutReverseSites) {
-  qdmi::DeviceSessionConfig overrides;
-  overrides.deviceConfiguration = qdmi::FileDeviceConfiguration{
-      MQT_CORE_MLIR_DIRECTIONAL_ONE_WAY_SC_CONFIG};
-  const auto device = qdmi::Session::openDevice("mqt.sc.default", overrides);
+  const auto device =
+      qdmi::Session::openDevice("test.mlir.directional-one-way");
   auto target = mlir::compilerTargetFromDevice(device);
   ASSERT_FALSE(target);
   const auto message = llvm::toString(target.takeError());
@@ -424,10 +442,8 @@ TEST(CompilerQDMIAdapterTest, RejectsDirectionalOperationWithoutReverseSites) {
 
 TEST(CompilerQDMIAdapterTest,
      PreservesDirectionalCalibrationWhenBothOrientationsExist) {
-  qdmi::DeviceSessionConfig overrides;
-  overrides.deviceConfiguration = qdmi::FileDeviceConfiguration{
-      MQT_CORE_MLIR_DIRECTIONAL_TWO_WAY_SC_CONFIG};
-  const auto device = qdmi::Session::openDevice("mqt.sc.default", overrides);
+  const auto device =
+      qdmi::Session::openDevice("test.mlir.directional-two-way");
   const auto target = llvm::cantFail(mlir::compilerTargetFromDevice(device));
 
   ASSERT_EQ(target.couplings().size(), 1);

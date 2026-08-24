@@ -405,7 +405,7 @@ class CompilerTarget:
 
     @staticmethod
     def from_device_id(device_id: str, **session_parameters: Unpack[QDMISessionParameters]) -> CompilerTarget:
-        """Open a registered device and snapshot its compiler target."""
+        """Open a Client-visible device and snapshot its compiler target."""
 
     @property
     def name(self) -> str | None:
@@ -463,21 +463,20 @@ class TargetEnvironment:
         device_id: str,
         program_format: mqt.core.qdmi.ProgramFormat,
         *,
-        base_url: str | None = None,
+        driver_path: str | os.PathLike | None = None,
         token: str | None = None,
         auth_file: str | os.PathLike | None = None,
         auth_url: str | None = None,
         username: str | None = None,
         password: str | None = None,
-        device_config: str | None = None,
-        device_config_file: str | os.PathLike | None = None,
+        project_id: str | None = None,
         custom1: str | None = None,
         custom2: str | None = None,
         custom3: str | None = None,
         custom4: str | None = None,
         custom5: str | None = None,
     ) -> TargetEnvironment:
-        """Open a registered device and snapshot one accepted payload."""
+        """Open a Client-visible device and snapshot one accepted payload."""
 
     @property
     def target(self) -> CompilerTarget:

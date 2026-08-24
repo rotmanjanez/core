@@ -47,8 +47,7 @@ from mqt.core.mlir import (
     TargetEnvironment,
     compile_program,
 )
-from mqt.core.qdmi import ProgramFormat
-from mqt.core.qdmi.driver import open_device
+from mqt.core.qdmi import ProgramFormat, open_device
 
 device = open_device("mqt.ddsim.default")
 target = CompilerTarget(
