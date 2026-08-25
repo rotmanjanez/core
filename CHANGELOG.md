@@ -106,8 +106,8 @@ releases may include breaking changes.
   [#1549], [#1953]) ([**@burgholzer**], [**@denialhaag**])
 - ♻️ Improve the backward traversal logic for the `WireIterator` class ([#2184])
   ([**@MatthiasReumann**])
-- ✨ Include one-qubit ops to the `walkProgramGraph` graph traversal
-  function ([#2205]) ([**@MatthiasReumann**])
+- ✨ Include one-qubit ops to the `walkProgramGraph` graph traversal function
+  ([#2205]) ([**@MatthiasReumann**])
 
 ### Removed
 
