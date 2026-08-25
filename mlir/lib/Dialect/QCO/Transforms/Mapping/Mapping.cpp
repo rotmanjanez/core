@@ -591,9 +591,17 @@ private:
                 continue;
               }
 
+              Block const* block = anchor->getBlock();
               for (OpOperand& user : res.getUses()) {
                 Operation* owner = user.getOwner();
-                if (owner->isBeforeInBlock(anchor)) {
+
+                // Normalize owner to its nearest ancestor in anchor's block.
+
+                while (owner && owner->getBlock() != block) {
+                  owner = owner->getParentOp();
+                }
+
+                if (owner && owner->isBeforeInBlock(anchor)) {
                   anchor = owner;
                 }
               }
