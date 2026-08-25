@@ -554,10 +554,8 @@ private:
   /// Fix SSA dominance issues by reordering operations in topological order.
   /// Walks the def-use chains backward from the given sink-like operations
   /// (SinkOp, YieldOp, scf::YieldOp, scf::ConditionOp) and moves each ready
-  /// operation before an anchor operation, except for control-flow
-  /// operations (IfOp, IndexSwitchOp, scf::ForOp, scf::WhileOp) which are
-  /// released in place. Historically this replaced MLIR's `sortTopologically`
-  /// due to significant runtime overhead.
+  /// operation before an anchor operation. Historically this replaced MLIR's
+  /// `sortTopologically` due to significant runtime overhead.
   static void reorderForDominance(Wires& wires, IRRewriter& rewriter) {
     assert(!wires.empty());
     assert(all_of(wires, [](const auto& it) {
@@ -594,9 +592,9 @@ private:
               }
 
               for (OpOperand& user : res.getUses()) {
-                Operation* def = user.get().getDefiningOp();
-                if (def->isBeforeInBlock(anchor)) {
-                  anchor = def;
+                Operation* owner = user.getOwner();
+                if (owner->isBeforeInBlock(anchor)) {
+                  anchor = owner;
                 }
               }
             }
