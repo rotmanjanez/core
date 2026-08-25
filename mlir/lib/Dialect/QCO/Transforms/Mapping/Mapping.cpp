@@ -37,6 +37,7 @@
 #include <mlir/IR/Diagnostics.h>
 #include <mlir/IR/Dominance.h>
 #include <mlir/IR/Location.h>
+#include <mlir/IR/Operation.h>
 #include <mlir/IR/PatternMatch.h>
 #include <mlir/IR/Region.h>
 #include <mlir/IR/Threading.h>
@@ -396,20 +397,20 @@ protected:
                          .infos = std::move(infos),
                          .layout = std::move(*layout)};
 
-    const auto routeRes =
+    const auto res =
         route<WireDirection::Forward, RoutingMode::Hot>(bundle, &rewriter);
-    if (failed(routeRes)) {
+    if (failed(res)) {
       func.emitError() << "failed to map the function";
       signalPassFailure();
       return;
     }
 
     // Collect statistics.
-    const auto stats = *routeRes;
+    const auto stats = *res;
     numSwaps += stats.nswaps;
 
-    // Fix SSA Dominance issues.
-    llvm::for_each(body.getBlocks(), [](Block& b) { sortTopologically(&b); });
+    // Fix SSA dominance errors.
+    reorderForDominance(bundle.wires, rewriter);
   }
 
 private:
@@ -549,6 +550,69 @@ private:
     }
 
     return newWhileOp;
+  }
+
+  /// Fix SSA dominance issues by reordering operations in topological order.
+  /// Walks the def-use chains backward from the given sink-like operations
+  /// (SinkOp, YieldOp, scf::YieldOp, scf::ConditionOp) and moves each ready
+  /// operation before an anchor operation, except for control-flow
+  /// operations (IfOp, IndexSwitchOp, scf::ForOp, scf::WhileOp) which are
+  /// released in place. Historically this replaced MLIR's `sortTopologically`
+  /// due to significant runtime overhead.
+  static void reorderForDominance(Wires& wires, IRRewriter& rewriter) {
+    assert(!wires.empty());
+    assert(all_of(wires, [](const auto& it) {
+      return isa<SinkOp, YieldOp, scf::YieldOp, scf::ConditionOp>(
+          it.operation());
+    }));
+
+    Operation* anchor = wires.front().operation();
+
+    // Make sure to not revisit the anchor operation again.
+
+    if (isa<SinkOp>(anchor)) {
+      std::ranges::advance(wires.front(), -1);
+    } else {
+      assert(all_of(wires, [anchor](const auto& it) {
+        return it.operation() == anchor;
+      }));
+      for_each(wires, [](auto& it) { std::ranges::advance(it, -1); });
+    }
+
+    walkProgramGraph<WireDirection::Backward>(
+        wires, [&](const Frontier& frontier, ReleasedOps& released) {
+          assert(!frontier.empty());
+
+          for (Operation* op : frontier.keys()) {
+
+            // If the operation produces classical result chains, make sure to
+            // place the operation before (from an IR perspective) the earliest
+            // quantum OR *classical* user.
+
+            for (OpResult res : op->getResults()) {
+              if (isa<QubitType>(res.getType()) || res.use_empty()) {
+                continue;
+              }
+
+              for (OpOperand& user : res.getUses()) {
+                Operation* def = user.get().getDefiningOp();
+                if (def->isBeforeInBlock(anchor)) {
+                  anchor = def;
+                }
+              }
+            }
+
+            rewriter.moveOpBefore(op, anchor);
+            released.emplace_back(op);
+
+            // Because the op is moved before the anchor, the earliest operation
+            // will be *op*. Thus, re-set the anchor.
+
+            anchor = op;
+          }
+
+          return WalkResult::advance();
+        });
   }
 
   /// Return the wires of a dynamic computation.
@@ -1090,8 +1154,8 @@ private:
 
         infos.swap(prog0, prog1);
 
-        std::advance(w0, 1); // Move to SWAP.
-        std::advance(w1, 1);
+        std::ranges::advance(w0, 1); // Move to SWAP.
+        std::ranges::advance(w1, 1);
       }
 
       layout.swap(hw0, hw1);
@@ -1176,7 +1240,7 @@ private:
     if constexpr (Direction == WireDirection::Backward) {
       for (auto& it : wires) {
         if (it == std::default_sentinel) {
-          std::advance(it, 1);
+          std::ranges::advance(it, 1);
         }
       }
     }
@@ -1396,7 +1460,7 @@ private:
       totalStats.merge(*stats);
 
       if constexpr (Mode == RoutingMode::Hot) {
-        for_each(child.wires, [](auto& it) { std::advance(it, -1); });
+        for_each(child.wires, [](auto& it) { std::ranges::advance(it, -1); });
       }
     }
 
@@ -1431,13 +1495,14 @@ private:
       totalStats.merge(*stats);
 
       if constexpr (Mode == RoutingMode::Hot) {
-        for_each(children[1].wires, [](auto& it) { std::advance(it, -1); });
+        for_each(children[1].wires,
+                 [](auto& it) { std::ranges::advance(it, -1); });
       }
     }
 
     // Find (insert) the epilogue SWAP sequence for (into) the child region
-    // using the restore (scf::ForOp, scf::While), converge (IfOp), and vote
-    // and restore (IndexSwitchOp) strategies.
+    // using the restore (scf::ForOp, scf::While), converge (IfOp), and drive-by
+    // (IndexSwitchOp) strategies.
 
     Layout exit =
         TypeSwitch<Operation*, Layout>(op)
@@ -1503,9 +1568,10 @@ private:
                   realignQubitValues(yieldOp.getTargets(), permutation, child));
             });
 
-        // Sort topologically to fix any occurring SSA dominance errors.
+        for_each(child.wires, [](auto& it) { std::ranges::advance(it, 1); });
 
-        sortTopologically(block);
+        // Fix SSA dominance errors.
+        reorderForDominance(child.wires, *rewriter);
       }
     }
 
@@ -1568,7 +1634,8 @@ private:
           // the respective wires.
 
           for_each(composite.indices, [&](size_t i) {
-            std::advance(wires[i], WireTraversalTraits<Direction>::stride());
+            std::ranges::advance(wires[i],
+                                 WireTraversalTraits<Direction>::stride());
           });
         }
       }
@@ -1589,7 +1656,7 @@ private:
         // operations or two-qubit gates of the current or any subsequent layer.
         // Decrement each iterator to point at a valid insertion point.
 
-        for_each(wires, [](auto& it) { std::advance(it, -1); });
+        for_each(wires, [](auto& it) { std::ranges::advance(it, -1); });
       }
 
       insertSWAPs<Mode>(*swaps, bundle, stats, rewriter);
@@ -1603,7 +1670,7 @@ private:
         // insertion. Otherwise, an increment will move the iterator past the
         // inserted SWAP operation.
 
-        for_each(wires, [](auto& it) { std::advance(it, 1); });
+        for_each(wires, [](auto& it) { std::ranges::advance(it, 1); });
       }
     }
 

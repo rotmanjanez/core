@@ -183,6 +183,10 @@ void walkProgramGraph(MutableArrayRef<WireIterator> wires,
       }
     }
 
+    if (frontier.empty()) {
+      return;
+    }
+
     released.clear();
     const auto res = std::invoke(fn, frontier, released);
     if (res.wasInterrupted() || res.wasSkipped()) {
