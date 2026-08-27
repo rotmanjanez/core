@@ -35,6 +35,9 @@ sampling them demonstrates the behavior end to end.
       boundary.
 - [x] (2026-08-27 19:34Z) Run focused and full validation for the follow-up
       cleanup; commit preparation is complete.
+- [x] (2026-08-27 21:46Z) Coalesce repeated QC static references before QCO
+  lowering, make QCO static-index uniqueness module-wide, and add direct and
+  OpenQASM regressions.
 
 ## Surprises & Discoveries
 
@@ -62,6 +65,10 @@ sampling them demonstrates the behavior end to end.
 - Observation: PR #2220's use-count check alone accepts two distinct
   `qco.static` values with the same index. Evidence: both values can have one
   use while still aliasing one physical DD wire.
+- Observation: valid OpenQASM hardware references can create repeated
+  `qc.static` operations. Evidence: `h $0; x $0;` created two QC roots and was
+  rejected by the new QCO static-index check until QC-to-QCO lowering coalesced
+  them.
 
 ## Decision Log
 
@@ -82,10 +89,10 @@ sampling them demonstrates the behavior end to end.
   duplicate validation in the executor adds code without protecting supported
   callers. Date/Author: 2026-08-27, Codex with user approval.
 - Decision: make static-index uniqueness part of `qco::verifyLinearity` and
-  check it per isolated scope. Rationale: this rejects physical-wire aliases at
-  the same checked boundaries as SSA nonlinearity while allowing independent
-  functions to use the same static index. Date/Author: 2026-08-27, Codex with
-  user approval.
+  check it across the supplied root, normally the full module. Rationale: a
+  static index identifies one physical site for the program; helper functions
+  must receive qubits through arguments instead of creating independent roots.
+  Date/Author: 2026-08-27, Codex with user approval.
 - Decision: do not run QCO cleanup inside simulation or sampling. Rationale:
   cleanup can remove all operations on a terminal wire and therefore change the
   observable fallback bit-string width. Callers can request cleanup explicitly
@@ -111,11 +118,12 @@ crash caused by its `INT64_MIN` tombstone. Small additive follow-ups correct the
 lint and avoid that unrelated verifier path in the maximum-shift test.
 
 After merging `main` at `baecdc55f`, the follow-up cleanup builds successfully,
-stub regeneration is stable, all 4,034 release C++ tests pass (with one
+stub regeneration is stable, all 4,036 release C++ tests pass (with one
 documented skip), and the focused Python QCO DD suite passes all six tests on
-Python 3.14. The focused QCO utility, QCO IR, and compiler suites pass 125, 488,
-and 137 tests respectively. Independent review found no blocking issue in the
-root static-index validation or the removed simulator-side validity checks.
+Python 3.14. The focused QCO utility, QCO IR, QC-to-QCO, and compiler suites
+pass 125, 488, 169, and 138 tests respectively. Repository-wide lint passes. The
+standalone C++ lint session cannot start locally because this machine lacks its
+required clang-tidy 22; the hosted check remains authoritative for clang-tidy.
 
 ## Context and Orientation
 
@@ -136,8 +144,8 @@ implemented in `mlir/lib/Compiler/Programs.cpp`.
 The Python surface is exactly:
 
     build_functionality(program, dd_package) -> MatrixDD
-    simulate(program, initial_state, dd_package, seed=None) -> VectorDD
-    sample(program, dd_package, shots=1024, seed=None) -> dict[str, int]
+    simulate(program, initial_state, dd_package, seed=0) -> VectorDD
+    sample(program, dd_package, shots=1024, seed=0) -> dict[str, int]
 
 Follow `AGENTS.md` and `docs/ai_usage.md`. Preserve unrelated work, regenerate
 stubs only through Nox, sign commits, and do not treat this plan as authority
@@ -232,3 +240,7 @@ engine and focused validation milestones.
 Revision note (2026-08-27): Recorded the merged PR #2220 boundary, removed
 duplicate executor validation, and rejected implicit cleanup because it changes
 fallback sampling width.
+
+Revision note (2026-08-27): Normalized repeated QC static references before QCO
+lowering and made static-index uniqueness module-wide after reproducing the
+issue with valid OpenQASM hardware references.

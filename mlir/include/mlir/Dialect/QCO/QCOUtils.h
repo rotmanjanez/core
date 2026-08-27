@@ -56,7 +56,7 @@ inline bool checkDeadGate(Operation* op) {
 }
 
 /// Verify that every linear QCO value under @p root has exactly one use and
-/// that each static qubit index names one value per isolated scope.
+/// that each static qubit index names one value.
 [[nodiscard]] LogicalResult verifyLinearity(Operation* root);
 
 /// Maximum number of modifier targets supported by @ref

@@ -457,6 +457,50 @@ static void commitQubits(LoweringState& state, Operation* anchor,
   return qcoTargets;
 }
 
+/** Hoists and coalesces static qubit references before QCO lowering. */
+static void coalesceStaticQubits(ModuleOp moduleOp) {
+  for (func::FuncOp func : moduleOp.getOps<func::FuncOp>()) {
+    if (func.isDeclaration()) {
+      continue;
+    }
+
+    DenseMap<uint64_t, SmallVector<qc::StaticOp>> aliases;
+    SmallVector<uint64_t> indices;
+    func.walk([&](qc::StaticOp staticOp) {
+      auto [it, inserted] = aliases.try_emplace(staticOp.getIndex());
+      if (inserted) {
+        indices.emplace_back(staticOp.getIndex());
+      }
+      it->second.emplace_back(staticOp);
+    });
+    if (indices.empty()) {
+      continue;
+    }
+
+    OpBuilder builder(moduleOp.getContext());
+    builder.setInsertionPointToStart(&func.getBody().front());
+    SmallVector<qc::StaticOp> obsolete;
+    for (uint64_t index : indices) {
+      auto& staticOps = aliases[index];
+      if (staticOps.size() == 1) {
+        continue;
+      }
+
+      auto canonical =
+          qc::StaticOp::create(builder, staticOps.front().getLoc(), index);
+      canonical->setDiscardableAttrs(
+          staticOps.front()->getDiscardableAttrDictionary());
+      for (qc::StaticOp staticOp : staticOps) {
+        staticOp.getQubit().replaceAllUsesWith(canonical.getQubit());
+        obsolete.emplace_back(staticOp);
+      }
+    }
+    for (qc::StaticOp staticOp : obsolete) {
+      staticOp.erase();
+    }
+  }
+}
+
 /** @brief Rejects quantum SSA sources unsupported by the lowering state. */
 [[nodiscard]] static LogicalResult
 validateQuantumValueSources(Operation* root) {
@@ -1866,6 +1910,8 @@ protected:
   void runOnOperation() override {
     MLIRContext* context = &getContext();
     auto* moduleOp = getOperation();
+
+    coalesceStaticQubits(cast<ModuleOp>(moduleOp));
 
     // Create state object to track qubit value flow
     LoweringState state;
