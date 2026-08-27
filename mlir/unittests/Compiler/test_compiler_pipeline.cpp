@@ -320,6 +320,27 @@ TEST(CompilerProgramOwnershipTest, EnforcesQCOLinearityAtPublicBoundaries) {
       return
     }
   })mlir";
+  constexpr llvm::StringLiteral aliasedStaticSource = R"mlir(module {
+    func.func @main() {
+      %q0 = qco.static 0 : !qco.qubit
+      %q1 = qco.static 0 : !qco.qubit
+      qco.sink %q0 : !qco.qubit
+      qco.sink %q1 : !qco.qubit
+      return
+    }
+  })mlir";
+  constexpr llvm::StringLiteral scopedStaticSource = R"mlir(module {
+    func.func @first() {
+      %q = qco.static 0 : !qco.qubit
+      qco.sink %q : !qco.qubit
+      return
+    }
+    func.func @second() {
+      %q = qco.static 0 : !qco.qubit
+      qco.sink %q : !qco.qubit
+      return
+    }
+  })mlir";
 
   auto moduleOp = parseSourceString<ModuleOp>(validSource, context.get());
   ASSERT_TRUE(moduleOp);
@@ -351,6 +372,16 @@ TEST(CompilerProgramOwnershipTest, EnforcesQCOLinearityAtPublicBoundaries) {
       parseSourceString<ModuleOp>(nonlinearSource, context.get());
   ASSERT_TRUE(nonlinearModule);
   EXPECT_FALSE(QCOProgram::fromModule(context, std::move(nonlinearModule)));
+
+  auto aliasedStaticModule =
+      parseSourceString<ModuleOp>(aliasedStaticSource, context.get());
+  ASSERT_TRUE(aliasedStaticModule);
+  EXPECT_FALSE(QCOProgram::fromModule(context, std::move(aliasedStaticModule)));
+
+  auto scopedStaticModule =
+      parseSourceString<ModuleOp>(scopedStaticSource, context.get());
+  ASSERT_TRUE(scopedStaticModule);
+  EXPECT_TRUE(QCOProgram::fromModule(context, std::move(scopedStaticModule)));
 
   auto transformInput = program->copy();
   auto pipelineInput = program->copy();
