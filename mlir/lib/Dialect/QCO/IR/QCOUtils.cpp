@@ -43,7 +43,7 @@ namespace mlir::qco {
 }
 
 LogicalResult verifyLinearity(Operation* root) {
-  DenseMap<Operation*, DenseSet<int64_t>> staticIndices;
+  DenseMap<Operation*, DenseSet<uint64_t>> staticIndices;
   const auto walkResult = root->walk([&](Operation* op) {
     if (auto staticOp = dyn_cast<StaticOp>(op)) {
       Operation* scope = op->getParentWithTrait<OpTrait::IsIsolatedFromAbove>();
