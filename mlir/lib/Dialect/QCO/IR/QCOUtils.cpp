@@ -15,6 +15,7 @@
 #include "mlir/Dialect/QCO/Utils/Matrix.h"
 
 #include <llvm/ADT/DenseMap.h>
+#include <llvm/ADT/DenseSet.h>
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/TypeSwitch.h>
 #include <mlir/Dialect/QCO/IR/QCODialect.h>
@@ -42,7 +43,21 @@ namespace mlir::qco {
 }
 
 LogicalResult verifyLinearity(Operation* root) {
+  DenseMap<Operation*, DenseSet<int64_t>> staticIndices;
   const auto walkResult = root->walk([&](Operation* op) {
+    if (auto staticOp = dyn_cast<StaticOp>(op)) {
+      Operation* scope = op->getParentWithTrait<OpTrait::IsIsolatedFromAbove>();
+      if (scope == nullptr) {
+        scope = root;
+      }
+      if (!staticIndices[scope].insert(staticOp.getIndex()).second) {
+        staticOp.emitError()
+            << "expected each static qubit index to identify one linear "
+               "value, but found duplicate index "
+            << staticOp.getIndex();
+        return WalkResult::interrupt();
+      }
+    }
     for (auto result : op->getResults()) {
       if (failed(verifyLinearValue(result))) {
         return WalkResult::interrupt();
