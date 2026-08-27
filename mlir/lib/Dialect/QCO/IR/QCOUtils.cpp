@@ -43,14 +43,10 @@ namespace mlir::qco {
 }
 
 LogicalResult verifyLinearity(Operation* root) {
-  DenseMap<Operation*, DenseSet<uint64_t>> staticIndices;
+  DenseSet<uint64_t> staticIndices;
   const auto walkResult = root->walk([&](Operation* op) {
     if (auto staticOp = dyn_cast<StaticOp>(op)) {
-      Operation* scope = op->getParentWithTrait<OpTrait::IsIsolatedFromAbove>();
-      if (scope == nullptr) {
-        scope = root;
-      }
-      if (!staticIndices[scope].insert(staticOp.getIndex()).second) {
+      if (!staticIndices.insert(staticOp.getIndex()).second) {
         staticOp.emitError()
             << "expected each static qubit index to identify one linear "
                "value, but found duplicate index "

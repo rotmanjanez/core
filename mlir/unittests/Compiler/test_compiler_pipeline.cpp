@@ -329,7 +329,7 @@ TEST(CompilerProgramOwnershipTest, EnforcesQCOLinearityAtPublicBoundaries) {
       return
     }
   })mlir";
-  constexpr llvm::StringLiteral scopedStaticSource = R"mlir(module {
+  constexpr llvm::StringLiteral crossFunctionStaticSource = R"mlir(module {
     func.func @first() {
       %q = qco.static 0 : !qco.qubit
       qco.sink %q : !qco.qubit
@@ -378,10 +378,11 @@ TEST(CompilerProgramOwnershipTest, EnforcesQCOLinearityAtPublicBoundaries) {
   ASSERT_TRUE(aliasedStaticModule);
   EXPECT_FALSE(QCOProgram::fromModule(context, std::move(aliasedStaticModule)));
 
-  auto scopedStaticModule =
-      parseSourceString<ModuleOp>(scopedStaticSource, context.get());
-  ASSERT_TRUE(scopedStaticModule);
-  EXPECT_TRUE(QCOProgram::fromModule(context, std::move(scopedStaticModule)));
+  auto crossFunctionStaticModule =
+      parseSourceString<ModuleOp>(crossFunctionStaticSource, context.get());
+  ASSERT_TRUE(crossFunctionStaticModule);
+  EXPECT_FALSE(
+      QCOProgram::fromModule(context, std::move(crossFunctionStaticModule)));
 
   auto transformInput = program->copy();
   auto pipelineInput = program->copy();
@@ -468,6 +469,22 @@ h q;
   auto reparsed = parseRecordedModule(roundTrip.str());
   ASSERT_TRUE(reparsed);
   EXPECT_TRUE(mlir::verify(*reparsed).succeeded());
+}
+
+TEST_F(CompilerPipelineTest, ReusesOpenQASMHardwareQubits) {
+  constexpr llvm::StringLiteral qasm = R"(OPENQASM 3.1;
+h $0;
+x $0;
+)";
+
+  auto qcProgram = QCProgram::fromQASMString(qasm.str());
+  ASSERT_TRUE(qcProgram);
+  auto qcoProgram = std::move(*qcProgram).intoQCO();
+  ASSERT_TRUE(qcoProgram);
+
+  size_t staticOps = 0;
+  qcoProgram->module().walk([&](qco::StaticOp) { ++staticOps; });
+  EXPECT_EQ(staticOps, 1U);
 }
 
 namespace {
