@@ -25,6 +25,7 @@
 #include <mlir/IR/BuiltinTypes.h>
 #include <mlir/IR/DialectRegistry.h>
 #include <mlir/IR/MLIRContext.h>
+#include <mlir/IR/OwningOpRef.h>
 #include <mlir/IR/Value.h>
 #include <mlir/IR/Verifier.h>
 #include <mlir/Parser/Parser.h>
@@ -454,4 +455,201 @@ TEST_F(TensorIteratorTest, TraversesWhileCarriedTensors) {
   --swapped;
   ASSERT_EQ(swapped.operation(), tensor1.getDefiningOp());
   ASSERT_EQ(swapped.tensor(), tensor1);
+}
+
+//===----------------------------------------------------------------------===//
+// CallTensorMapping
+//===----------------------------------------------------------------------===//
+
+namespace {
+/// A parsed module together with the first call inside it.
+struct ParsedCall {
+  OwningOpRef<ModuleOp> module;
+  func::CallOp call;
+};
+} // namespace
+
+static ParsedCall parseWithCall(MLIRContext* ctx, const char* source) {
+  ParsedCall out;
+  out.module = parseSourceString<ModuleOp>(source, ctx);
+  if (out.module) {
+    out.module->walk([&](func::CallOp c) {
+      if (!out.call) {
+        out.call = c;
+      }
+    });
+  }
+  return out;
+}
+
+/**
+ * @brief A callee that hands its tensor back maps the operand to that result.
+ */
+TEST_F(TensorIteratorTest, CallTensorMappingThreadsATensorThrough) {
+  auto p = parseWithCall(context.get(), R"mlir(
+func.func private @pass(%t: tensor<2x!qco.qubit>) -> tensor<2x!qco.qubit> {
+  return %t : tensor<2x!qco.qubit>
+}
+func.func @main() {
+  %c2 = arith.constant 2 : index
+  %t = qtensor.alloc(%c2) : tensor<2x!qco.qubit>
+  %r = func.call @pass(%t) : (tensor<2x!qco.qubit>) -> tensor<2x!qco.qubit>
+  qtensor.dealloc %r : tensor<2x!qco.qubit>
+  return
+}
+)mlir");
+  ASSERT_TRUE(p.module);
+  ASSERT_TRUE(p.call);
+
+  CallTensorMapping mapping;
+  auto mapped = mapping.getResultForOperand(p.call, p.call.getOperand(0));
+  ASSERT_TRUE(succeeded(mapped));
+  EXPECT_EQ(*mapped, p.call.getResult(0));
+}
+
+/**
+ * @brief A callee that swaps its tensors is followed by what it does, not by
+ * the position of its arguments.
+ */
+TEST_F(TensorIteratorTest, CallTensorMappingFollowsASwap) {
+  auto p = parseWithCall(context.get(), R"mlir(
+func.func private @swap(%a: tensor<2x!qco.qubit>, %b: tensor<2x!qco.qubit>)
+    -> (tensor<2x!qco.qubit>, tensor<2x!qco.qubit>) {
+  return %b, %a : tensor<2x!qco.qubit>, tensor<2x!qco.qubit>
+}
+func.func @main() {
+  %c2 = arith.constant 2 : index
+  %x = qtensor.alloc(%c2) : tensor<2x!qco.qubit>
+  %y = qtensor.alloc(%c2) : tensor<2x!qco.qubit>
+  %r:2 = func.call @swap(%x, %y) : (tensor<2x!qco.qubit>, tensor<2x!qco.qubit>)
+      -> (tensor<2x!qco.qubit>, tensor<2x!qco.qubit>)
+  qtensor.dealloc %r#0 : tensor<2x!qco.qubit>
+  qtensor.dealloc %r#1 : tensor<2x!qco.qubit>
+  return
+}
+)mlir");
+  ASSERT_TRUE(p.module);
+  ASSERT_TRUE(p.call);
+
+  CallTensorMapping mapping;
+  /// Pairing by position would send operand 0 to result 0.
+  auto mapped = mapping.getResultForOperand(p.call, p.call.getOperand(0));
+  ASSERT_TRUE(succeeded(mapped));
+  EXPECT_EQ(*mapped, p.call.getResult(1));
+  mapped = mapping.getResultForOperand(p.call, p.call.getOperand(1));
+  ASSERT_TRUE(succeeded(mapped));
+  EXPECT_EQ(*mapped, p.call.getResult(0));
+}
+
+/**
+ * @brief A callee that releases the tensor keeps it, so no result continues it.
+ */
+TEST_F(TensorIteratorTest, CallTensorMappingReportsAKeptTensor) {
+  auto p = parseWithCall(context.get(), R"mlir(
+func.func private @consume(%t: tensor<2x!qco.qubit>) {
+  qtensor.dealloc %t : tensor<2x!qco.qubit>
+  return
+}
+func.func @main() {
+  %c2 = arith.constant 2 : index
+  %t = qtensor.alloc(%c2) : tensor<2x!qco.qubit>
+  func.call @consume(%t) : (tensor<2x!qco.qubit>) -> ()
+  return
+}
+)mlir");
+  ASSERT_TRUE(p.module);
+  ASSERT_TRUE(p.call);
+
+  CallTensorMapping mapping;
+  auto mapped = mapping.getResultForOperand(p.call, p.call.getOperand(0));
+  ASSERT_TRUE(succeeded(mapped));
+  EXPECT_FALSE(*mapped);
+}
+
+/**
+ * @brief A tensor passed on to a second call is followed across it.
+ */
+TEST_F(TensorIteratorTest, CallTensorMappingHopsOverANestedCall) {
+  auto p = parseWithCall(context.get(), R"mlir(
+func.func private @inner(%t: tensor<2x!qco.qubit>) -> tensor<2x!qco.qubit> {
+  return %t : tensor<2x!qco.qubit>
+}
+func.func private @outer(%t: tensor<2x!qco.qubit>) -> tensor<2x!qco.qubit> {
+  %r = func.call @inner(%t) : (tensor<2x!qco.qubit>) -> tensor<2x!qco.qubit>
+  return %r : tensor<2x!qco.qubit>
+}
+func.func @main() {
+  %c2 = arith.constant 2 : index
+  %t = qtensor.alloc(%c2) : tensor<2x!qco.qubit>
+  %r = func.call @outer(%t) : (tensor<2x!qco.qubit>) -> tensor<2x!qco.qubit>
+  qtensor.dealloc %r : tensor<2x!qco.qubit>
+  return
+}
+)mlir");
+  ASSERT_TRUE(p.module);
+  func::CallOp outer;
+  p.module->walk([&](func::CallOp c) {
+    if (c.getCallee() == "outer") {
+      outer = c;
+    }
+  });
+  ASSERT_TRUE(outer);
+
+  CallTensorMapping mapping;
+  auto mapped = mapping.getResultForOperand(outer, outer.getOperand(0));
+  ASSERT_TRUE(succeeded(mapped));
+  EXPECT_EQ(*mapped, outer.getResult(0));
+}
+
+/**
+ * @brief A declaration has no body from which to derive a correspondence.
+ */
+TEST_F(TensorIteratorTest, CallTensorMappingFailsForADeclaration) {
+  auto p = parseWithCall(context.get(), R"mlir(
+func.func private @ext(tensor<2x!qco.qubit>) -> tensor<2x!qco.qubit>
+func.func @main() {
+  %c2 = arith.constant 2 : index
+  %t = qtensor.alloc(%c2) : tensor<2x!qco.qubit>
+  %r = func.call @ext(%t) : (tensor<2x!qco.qubit>) -> tensor<2x!qco.qubit>
+  qtensor.dealloc %r : tensor<2x!qco.qubit>
+  return
+}
+)mlir");
+  ASSERT_TRUE(p.module);
+  ASSERT_TRUE(p.call);
+
+  CallTensorMapping mapping;
+  EXPECT_TRUE(
+      failed(mapping.getResultForOperand(p.call, p.call.getOperand(0))));
+}
+
+/**
+ * @brief A recursive callee has no derivable correspondence.
+ */
+TEST_F(TensorIteratorTest, CallTensorMappingFailsForRecursion) {
+  auto p = parseWithCall(context.get(), R"mlir(
+func.func private @rec(%t: tensor<2x!qco.qubit>) -> tensor<2x!qco.qubit> {
+  %r = func.call @rec(%t) : (tensor<2x!qco.qubit>) -> tensor<2x!qco.qubit>
+  return %r : tensor<2x!qco.qubit>
+}
+func.func @main() {
+  %c2 = arith.constant 2 : index
+  %t = qtensor.alloc(%c2) : tensor<2x!qco.qubit>
+  %r = func.call @rec(%t) : (tensor<2x!qco.qubit>) -> tensor<2x!qco.qubit>
+  qtensor.dealloc %r : tensor<2x!qco.qubit>
+  return
+}
+)mlir");
+  ASSERT_TRUE(p.module);
+  func::CallOp outer;
+  p.module->walk([&](func::CallOp c) {
+    if (isa<func::FuncOp>(c->getParentOp()) &&
+        cast<func::FuncOp>(c->getParentOp()).getName() == "main") {
+      outer = c;
+    }
+  });
+  ASSERT_TRUE(outer);
+
+  CallTensorMapping mapping;
+  EXPECT_TRUE(failed(mapping.getResultForOperand(outer, outer.getOperand(0))));
 }

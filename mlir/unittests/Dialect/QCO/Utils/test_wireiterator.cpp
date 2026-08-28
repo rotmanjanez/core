@@ -10,6 +10,7 @@
 
 #include "mlir/Dialect/QCO/Builder/QCOProgramBuilder.h"
 #include "mlir/Dialect/QCO/IR/QCODialect.h"
+#include "mlir/Dialect/QCO/IR/QCOOps.h"
 #include "mlir/Dialect/QCO/Utils/WireIterator.h"
 
 #include <gtest/gtest.h>
@@ -17,8 +18,11 @@
 #include <mlir/Dialect/Arith/IR/Arith.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/Dialect/SCF/IR/SCF.h>
+#include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/DialectRegistry.h>
 #include <mlir/IR/MLIRContext.h>
+#include <mlir/IR/OwningOpRef.h>
+#include <mlir/Parser/Parser.h>
 #include <mlir/Support/LLVM.h>
 
 #include <cstdint>
@@ -43,6 +47,31 @@ protected:
   }
 
   std::unique_ptr<MLIRContext> context;
+
+  /// Parse a module from MLIR source.
+  ///
+  /// The call-traversal cases below are given as source rather than built with
+  /// `QCOProgramBuilder`, so that the iterator is exercised against the IR
+  /// directly and this suite stays independent of the builder.
+  [[nodiscard]] OwningOpRef<ModuleOp> parseModule(StringRef source) const {
+    return parseSourceString<ModuleOp>(source, context.get());
+  }
+
+  /// The first operation of kind @p OpT inside @p root.
+  template <typename OpT> [[nodiscard]] static OpT findOp(Operation* root) {
+    OpT found;
+    root->walk([&](OpT op) {
+      if (!found) {
+        found = op;
+      }
+    });
+    return found;
+  }
+
+  /// The body of the named function, to scope a search to one function.
+  [[nodiscard]] static Operation* funcNamed(ModuleOp module, StringRef name) {
+    return module.lookupSymbol<func::FuncOp>(name).getOperation();
+  }
 };
 } // namespace
 
@@ -268,3 +297,355 @@ INSTANTIATE_TEST_SUITE_P(DynamicAndStatic, WireIteratorTest, ::testing::Bool(),
                          [](const ::testing::TestParamInfo<bool>& info) {
                            return info.param ? "Dynamic" : "Static";
                          });
+
+/**
+ * @brief A wire runs through a call into the result that continues it, and
+ * back again.
+ *
+ * @details
+ * `@g` takes the qubit as operand 0 but hands it back as result 1, so pairing
+ * by raw index would pick the classical result instead.
+ */
+TEST_F(WireIteratorTest, TraversalThroughThreadingCall) {
+  auto module = parseModule(R"mlir(
+func.func private @g(%q: !qco.qubit, %theta: f64) -> (i1, !qco.qubit) {
+  %out, %bit = qco.measure %q : !qco.qubit
+  return %bit, %out : i1, !qco.qubit
+}
+func.func @main() {
+  %q0 = qco.alloc : !qco.qubit
+  %q1 = qco.h %q0 : !qco.qubit -> !qco.qubit
+  %c = arith.constant 5.000000e-01 : f64
+  %r:2 = func.call @g(%q1, %c) : (!qco.qubit, f64) -> (i1, !qco.qubit)
+  qco.sink %r#1 : !qco.qubit
+  return
+}
+)mlir");
+  ASSERT_TRUE(module);
+  auto* main = funcNamed(module.get(), "main");
+  Value q0 = findOp<qco::AllocOp>(main).getResult();
+  Value q1 = findOp<qco::HOp>(main).getQubitOut();
+  Value q2 = findOp<func::CallOp>(main).getResult(1);
+
+  qco::WireIterator it(q0);
+  ASSERT_EQ(it.qubit(), q0); // qco.alloc
+  ASSERT_TRUE(it.atWireStart());
+
+  ++it;
+  ASSERT_EQ(it.operation(), q1.getDefiningOp()); // qco.h
+  ASSERT_EQ(it.qubit(), q1);
+
+  ++it;
+  ASSERT_EQ(it.operation(), q2.getDefiningOp()); // func.call
+  ASSERT_EQ(it.qubit(), q2);
+
+  // And back again.
+  --it;
+  ASSERT_EQ(it.operation(), q1.getDefiningOp());
+  ASSERT_EQ(it.qubit(), q1);
+
+  --it;
+  ASSERT_EQ(it.operation(), q0.getDefiningOp());
+  ASSERT_EQ(it.qubit(), q0);
+  ASSERT_TRUE(it.atWireStart());
+}
+
+/**
+ * @brief A callee that keeps the qubit ends the wire at the call.
+ */
+TEST_F(WireIteratorTest, TraversalIntoConsumingCall) {
+  auto module = parseModule(R"mlir(
+func.func private @consume(%q: !qco.qubit) {
+  qco.sink %q : !qco.qubit
+  return
+}
+func.func @main() {
+  %q0 = qco.alloc : !qco.qubit
+  %q1 = qco.h %q0 : !qco.qubit -> !qco.qubit
+  func.call @consume(%q1) : (!qco.qubit) -> ()
+  return
+}
+)mlir");
+  ASSERT_TRUE(module);
+  auto* main = funcNamed(module.get(), "main");
+  Value q0 = findOp<qco::AllocOp>(main).getResult();
+  Value q1 = findOp<qco::HOp>(main).getQubitOut();
+
+  qco::WireIterator it(q0);
+  ++it;
+  ASSERT_EQ(it.qubit(), q1); // qco.h
+
+  ++it;
+  // The call is the last operation on the wire.
+  ASSERT_TRUE(isa<func::CallOp>(it.operation()));
+
+  ++it;
+  ASSERT_EQ(it, std::default_sentinel);
+}
+
+/**
+ * @brief A wire starts at a call whose callee creates the qubit, so backward
+ * traversal stops there instead of spinning.
+ */
+TEST_F(WireIteratorTest, TraversalFromProducingCall) {
+  auto module = parseModule(R"mlir(
+func.func private @produce() -> !qco.qubit {
+  %q = qco.alloc : !qco.qubit
+  return %q : !qco.qubit
+}
+func.func @main() {
+  %r = func.call @produce() : () -> !qco.qubit
+  %q1 = qco.h %r : !qco.qubit -> !qco.qubit
+  qco.sink %q1 : !qco.qubit
+  return
+}
+)mlir");
+  ASSERT_TRUE(module);
+  auto* main = funcNamed(module.get(), "main");
+  Value q0 = findOp<func::CallOp>(main).getResult(0);
+  Value q1 = findOp<qco::HOp>(main).getQubitOut();
+
+  qco::WireIterator it(q1);
+  ASSERT_EQ(it.operation(), q1.getDefiningOp()); // qco.h
+  ASSERT_FALSE(it.atWireStart());
+
+  --it;
+  ASSERT_EQ(it.operation(), q0.getDefiningOp()); // func.call
+  ASSERT_EQ(it.qubit(), q0);
+  ASSERT_TRUE(it.atWireStart());
+
+  // Going further back must not move the iterator.
+  --it;
+  ASSERT_EQ(it.operation(), q0.getDefiningOp());
+  ASSERT_EQ(it.qubit(), q0);
+}
+
+/**
+ * @brief A callee may hand its qubits back in a different order than it takes
+ * them; the wire follows the qubit, not its position.
+ */
+TEST_F(WireIteratorTest, TraversalThroughReorderingCall) {
+  auto module = parseModule(R"mlir(
+func.func private @relabel(%a: !qco.qubit, %b: !qco.qubit) -> (!qco.qubit, !qco.qubit) {
+  return %b, %a : !qco.qubit, !qco.qubit
+}
+func.func @main() {
+  %q0 = qco.alloc : !qco.qubit
+  %q1 = qco.alloc : !qco.qubit
+  %r:2 = func.call @relabel(%q0, %q1) : (!qco.qubit, !qco.qubit) -> (!qco.qubit, !qco.qubit)
+  qco.sink %r#0 : !qco.qubit
+  qco.sink %r#1 : !qco.qubit
+  return
+}
+)mlir");
+  ASSERT_TRUE(module);
+  auto* main = funcNamed(module.get(), "main");
+  SmallVector<Value> allocs;
+  main->walk([&](qco::AllocOp op) { allocs.emplace_back(op.getResult()); });
+  ASSERT_EQ(allocs.size(), 2U);
+  auto call = findOp<func::CallOp>(main);
+
+  qco::CallQubitMapping mapping;
+  auto mapped = mapping.getResultForOperand(call, call.getOperand(0));
+  ASSERT_TRUE(succeeded(mapped));
+  EXPECT_EQ(*mapped, call.getResult(1));
+
+  /// `@relabel` returns its arguments swapped, so argument 0 leaves through
+  /// result 1. Pairing by position would follow the wrong wire here.
+  qco::WireIterator it(allocs[0]);
+  ++it;
+  ASSERT_TRUE(isa<func::CallOp>(it.operation()));
+  ASSERT_EQ(it.qubit(), call.getResult(1)); // not result 0
+
+  --it;
+  ASSERT_EQ(it.qubit(), allocs[0]);
+
+  /// The other argument leaves through the first result.
+  qco::WireIterator other(allocs[1]);
+  ++other;
+  ASSERT_EQ(other.qubit(), call.getResult(0));
+
+  /// Changing the callee invalidates the cached correspondence.
+  auto callee = module->lookupSymbol<func::FuncOp>("relabel");
+  auto returnOp =
+      cast<func::ReturnOp>(callee.getBody().front().getTerminator());
+  returnOp->setOperands(callee.getArguments());
+  mapping.invalidate();
+  mapped = mapping.getResultForOperand(call, call.getOperand(0));
+  ASSERT_TRUE(succeeded(mapped));
+  EXPECT_EQ(*mapped, call.getResult(0));
+}
+
+/**
+ * @brief A recursive callee has no derivable correspondence.
+ */
+TEST_F(WireIteratorTest, CallQubitMappingFailsForRecursion) {
+  auto module = parseModule(R"mlir(
+func.func private @rec(%q: !qco.qubit) -> !qco.qubit {
+  %h = qco.h %q : !qco.qubit -> !qco.qubit
+  %r = func.call @rec(%h) : (!qco.qubit) -> !qco.qubit
+  return %r : !qco.qubit
+}
+func.func @main() {
+  %q0 = qco.alloc : !qco.qubit
+  %r = func.call @rec(%q0) : (!qco.qubit) -> !qco.qubit
+  qco.sink %r : !qco.qubit
+  return
+}
+)mlir");
+  ASSERT_TRUE(module);
+  auto* main = funcNamed(module.get(), "main");
+  Value q0 = findOp<qco::AllocOp>(main).getResult();
+  auto call = findOp<func::CallOp>(main);
+
+  qco::CallQubitMapping mapping;
+  EXPECT_TRUE(failed(mapping.getResultForOperand(call, call.getOperand(0))));
+
+  qco::WireIterator it(q0);
+  ++it;
+  ASSERT_TRUE(isa<func::CallOp>(it.operation()));
+  ++it;
+  EXPECT_EQ(it, std::default_sentinel);
+}
+
+/**
+ * @brief A declaration has no body from which to derive a correspondence.
+ */
+TEST_F(WireIteratorTest, CallQubitMappingFailsForADeclaration) {
+  auto module = parseModule(R"mlir(
+func.func private @ext(!qco.qubit) -> !qco.qubit
+func.func @main() {
+  %q0 = qco.alloc : !qco.qubit
+  %r = func.call @ext(%q0) : (!qco.qubit) -> !qco.qubit
+  qco.sink %r : !qco.qubit
+  return
+}
+)mlir");
+  ASSERT_TRUE(module);
+  auto call = findOp<func::CallOp>(funcNamed(module.get(), "main"));
+  ASSERT_TRUE(call);
+
+  qco::CallQubitMapping mapping;
+  EXPECT_TRUE(failed(mapping.getResultForOperand(call, call.getOperand(0))));
+}
+
+/**
+ * @brief Classical operands and results are skipped when pairing qubits.
+ *
+ * @details
+ * `@mixed` takes a bit before its qubit and hands the bit back first, so every
+ * position used for pairing has to be counted over the qubits alone.
+ */
+TEST_F(WireIteratorTest, CallQubitMappingSkipsClassicalValues) {
+  auto module = parseModule(R"mlir(
+func.func private @mixed(%b: i1, %q: !qco.qubit) -> (i1, !qco.qubit) {
+  return %b, %q : i1, !qco.qubit
+}
+func.func @main() {
+  %t = arith.constant true
+  %q0 = qco.alloc : !qco.qubit
+  %r:2 = func.call @mixed(%t, %q0) : (i1, !qco.qubit) -> (i1, !qco.qubit)
+  qco.sink %r#1 : !qco.qubit
+  return
+}
+)mlir");
+  ASSERT_TRUE(module);
+  auto call = findOp<func::CallOp>(funcNamed(module.get(), "main"));
+  ASSERT_TRUE(call);
+
+  qco::CallQubitMapping mapping;
+  /// The qubit is operand 1 and result 1; the bit on either side is ignored.
+  auto mapped = mapping.getResultForOperand(call, call.getOperand(1));
+  ASSERT_TRUE(succeeded(mapped));
+  EXPECT_EQ(*mapped, call.getResult(1));
+  /// The classical operand is not part of the pairing.
+  mapped = mapping.getResultForOperand(call, call.getOperand(0));
+  ASSERT_TRUE(succeeded(mapped));
+  EXPECT_FALSE(*mapped);
+}
+
+/**
+ * @brief Values that are not part of a call have no counterpart.
+ */
+TEST_F(WireIteratorTest, CallQubitMappingRejectsForeignValues) {
+  auto module = parseModule(R"mlir(
+func.func private @produce() -> !qco.qubit {
+  %q = qco.alloc : !qco.qubit
+  return %q : !qco.qubit
+}
+func.func @main() {
+  %other = qco.alloc : !qco.qubit
+  %r = func.call @produce() : () -> !qco.qubit
+  qco.sink %r : !qco.qubit
+  qco.sink %other : !qco.qubit
+  return
+}
+)mlir");
+  ASSERT_TRUE(module);
+  auto* main = funcNamed(module.get(), "main");
+  auto call = findOp<func::CallOp>(main);
+  Value other = findOp<qco::AllocOp>(main).getResult();
+  ASSERT_TRUE(call);
+
+  qco::CallQubitMapping mapping;
+  auto mapped = mapping.getResultForOperand(call, other);
+  ASSERT_TRUE(succeeded(mapped));
+  EXPECT_FALSE(*mapped);
+}
+
+/**
+ * @brief A qubit arriving as a function argument is the start of its wire.
+ */
+TEST_F(WireIteratorTest, AWireStartsAtAFunctionArgument) {
+  auto module = parseModule(R"mlir(
+func.func private @body(%q: !qco.qubit) -> !qco.qubit {
+  %h = qco.h %q : !qco.qubit -> !qco.qubit
+  return %h : !qco.qubit
+}
+)mlir");
+  ASSERT_TRUE(module);
+  auto func = module->lookupSymbol<func::FuncOp>("body");
+  ASSERT_TRUE(func);
+
+  const qco::WireIterator it(func.getArgument(0));
+  EXPECT_EQ(it.operation(), nullptr);
+  EXPECT_TRUE(it.atWireStart());
+}
+
+/**
+ * @brief Stepping back from a call that keeps the qubit lands on the operation
+ * that produced it.
+ */
+TEST_F(WireIteratorTest, TraversalBackwardFromAConsumingCall) {
+  auto module = parseModule(R"mlir(
+func.func private @consume(%q: !qco.qubit) {
+  qco.sink %q : !qco.qubit
+  return
+}
+func.func @main() {
+  %q0 = qco.alloc : !qco.qubit
+  %q1 = qco.h %q0 : !qco.qubit -> !qco.qubit
+  func.call @consume(%q1) : (!qco.qubit) -> ()
+  return
+}
+)mlir");
+  ASSERT_TRUE(module);
+  auto* main = funcNamed(module.get(), "main");
+  Value q0 = findOp<qco::AllocOp>(main).getResult();
+  Value q1 = findOp<qco::HOp>(main).getQubitOut();
+
+  qco::WireIterator it(q0);
+  ++it;
+  ++it;
+  ASSERT_TRUE(isa<func::CallOp>(it.operation()));
+
+  // The callee keeps the qubit, so the call holds it as an operand and the
+  // gate before it is where the wire came from.
+  --it;
+  EXPECT_EQ(it.operation(), q1.getDefiningOp());
+  EXPECT_EQ(it.qubit(), q1);
+
+  --it;
+  EXPECT_EQ(it.operation(), q0.getDefiningOp());
+  EXPECT_TRUE(it.atWireStart());
+}
