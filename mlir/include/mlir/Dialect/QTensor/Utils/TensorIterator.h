@@ -10,11 +10,19 @@
 
 #pragma once
 
+#include <llvm/ADT/ArrayRef.h>
+#include <llvm/ADT/DenseMap.h>
+#include <llvm/ADT/DenseSet.h>
+#include <llvm/ADT/SmallVector.h>
+#include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/IR/Builders.h>
 #include <mlir/IR/BuiltinTypes.h>
 #include <mlir/IR/Operation.h>
 #include <mlir/IR/Value.h>
+#include <mlir/Support/LLVM.h>
+#include <mlir/Support/LogicalResult.h>
 
+#include <cstdint>
 #include <iterator>
 
 namespace mlir::qtensor {
@@ -85,5 +93,44 @@ private:
   TypedValue<RankedTensorType> tensor_;
   bool isFinal_;
   bool isSentinel_;
+};
+
+/**
+ * @brief Which qubit-tensor result of a call continues which of its operands.
+ *
+ * @details
+ * The tensor counterpart of `CallQubitMapping` in
+ * `mlir/Dialect/QCO/Utils/WireIterator.h`: the correspondence is derived by
+ * threading each tensor argument through the callee body, cached per callee.
+ * The mapping fails when the callee cannot be analyzed.
+ */
+class CallTensorMapping {
+public:
+  /**
+   * @brief Get the call result that continues the chain of a tensor operand.
+   *
+   * @param callOp The call the tensor flows into.
+   * @param operand The qubit-tensor operand of @p callOp.
+   * @return The matching result, a null value when the callee keeps the tensor,
+   * or failure when the correspondence cannot be derived.
+   */
+  [[nodiscard]] FailureOr<Value> getResultForOperand(func::CallOp callOp,
+                                                     Value operand);
+
+private:
+  /// Marks a tensor argument that never reaches a result.
+  static constexpr int64_t KEPT = -1;
+
+  /// @returns per tensor argument position, the result index it flows into.
+  FailureOr<ArrayRef<int64_t>> mappingFor(func::CallOp callOp);
+
+  /// Derive the mapping of @p callee by threading its tensor arguments.
+  FailureOr<SmallVector<int64_t>> computeMapping(func::FuncOp callee);
+
+  /// Follow @p arg to its operand index in @p returnOp, hopping over calls.
+  FailureOr<int64_t> threadToResult(Value arg, func::ReturnOp returnOp);
+
+  DenseMap<Operation*, SmallVector<int64_t>> cache;
+  DenseSet<Operation*> inProgress;
 };
 } // namespace mlir::qtensor

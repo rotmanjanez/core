@@ -13,13 +13,77 @@
 #include "mlir/Dialect/QCO/IR/QCOOps.h"
 #include "mlir/Dialect/QTensor/IR/QTensorOps.h"
 
+#include <llvm/ADT/DenseMap.h>
+#include <llvm/ADT/DenseSet.h>
+#include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/IR/Operation.h>
 #include <mlir/IR/Value.h>
+#include <mlir/Support/LogicalResult.h>
 
 #include <cstdint>
 #include <iterator>
 
 namespace mlir::qco {
+
+/**
+ * @brief Resolves how qubits flow across a call boundary.
+ *
+ * @details
+ * Rather than assuming that the i-th qubit operand of a call becomes its i-th
+ * qubit result, the mapping is derived from the callee: every qubit argument is
+ * threaded through the callee's body and the result it ends up in is recorded.
+ * A callee is therefore free to return its qubits in a different order than it
+ * takes them, or to keep some of them entirely.
+ *
+ * The derived mapping is cached per callee, so threading a body costs once
+ * rather than once per traversal step. Instances are cheap to create; share one
+ * across a pass to get the caching.
+ *
+ * The mapping fails when the callee cannot be analyzed, such as for a
+ * declaration, recursion, or a body that is not a single straight-line block.
+ */
+class CallQubitMapping {
+public:
+  /**
+   * @brief Get the call result that continues the wire of a qubit operand.
+   *
+   * @param callOp The call the qubit flows into.
+   * @param operand The qubit operand of @p callOp.
+   * @return The matching qubit result, a null value when the callee keeps the
+   * qubit, or failure when the correspondence cannot be derived.
+   */
+  [[nodiscard]] FailureOr<Value> getResultForOperand(func::CallOp callOp,
+                                                     Value operand);
+
+  /**
+   * @brief Drop everything cached.
+   *
+   * @details
+   * Must be called after changing or erasing any callee that may contribute to
+   * a cached mapping. A mapping derived by threading a wire through one callee
+   * can depend on other callees, so the whole cache is dropped.
+   */
+  void invalidate();
+
+private:
+  friend class WireIterator;
+
+  /// Marks a qubit argument that never reaches a result.
+  static constexpr int64_t KEPT = -1;
+
+  /// @returns for each qubit argument position of @p callOp's callee, the index
+  /// of the call result it flows into, or `KEPT`.
+  FailureOr<ArrayRef<int64_t>> mappingFor(func::CallOp callOp);
+
+  /// Derive the mapping of @p callee by threading each of its qubit arguments.
+  FailureOr<SmallVector<int64_t>> computeMapping(func::FuncOp callee);
+
+  /// Get the call operand that feeds the wire of @p result.
+  FailureOr<Value> getOperandForResult(func::CallOp callOp, Value result);
+
+  DenseMap<Operation*, SmallVector<int64_t>> cache;
+  DenseSet<Operation*> inProgress;
+};
 
 /**
  * @brief A bidirectional_iterator traversing the def-use chain of a qubit wire.
@@ -35,6 +99,12 @@ public:
 
   WireIterator()
       : op_(nullptr), qubit_(nullptr), isFinal_(false), isSentinel_(false) {}
+
+  /**
+   * @brief Construct an iterator over the wire of @p qubit.
+   *
+   * @param qubit The qubit value to start at.
+   */
   explicit WireIterator(Value qubit)
       : op_(qubit.getDefiningOp()), qubit_(qubit), isFinal_(false),
         isSentinel_(false) {}
@@ -79,7 +149,25 @@ public:
     return isSentinel_;
   }
 
+  /**
+   * @brief Check whether the iterator sits at the start of the wire.
+   *
+   * @details
+   * At the start, backward traversal can no longer make progress. Besides
+   * allocations and the like, this is also the case for a call that creates the
+   * qubit rather than threading one through.
+   *
+   * @return True if `operator--` would not move the iterator.
+   */
+  [[nodiscard]] bool atWireStart() const;
+
 private:
+  friend class CallQubitMapping;
+
+  WireIterator(Value qubit, CallQubitMapping* mapping)
+      : op_(qubit.getDefiningOp()), qubit_(qubit), isFinal_(false),
+        isSentinel_(false), mapping_(mapping) {}
+
   /// Return true, if an op doesn't return, but only consumes, a qubit value.
   static bool isSinkLikeOperation(Operation* op);
 
@@ -96,6 +184,19 @@ private:
   Value qubit_;
   bool isFinal_;
   bool isSentinel_;
+  bool mappingFailed_ = false;
+  /// @returns the call result continuing the wire of @p operand, resolved
+  /// through the shared mapping when one was supplied.
+  FailureOr<Value> resultForOperand(func::CallOp callOp, Value operand) const;
+
+  /// @returns the call operand feeding the wire of @p result, resolved through
+  /// the shared mapping when one was supplied.
+  [[nodiscard]] Value operandForResult(func::CallOp callOp, Value result) const;
+
+  /// Shared, cached call mapping. Null means each query threads the callee
+  /// afresh, which is still correct but not cached. The iterator holds only
+  /// this pointer, so that copying it stays cheap.
+  CallQubitMapping* mapping_ = nullptr;
 };
 
 /**
@@ -120,11 +221,7 @@ template <> struct WireTraversalTraits<WireDirection::Backward> {
   static constexpr std::ptrdiff_t stride() { return -1; }
 
   /// @returns true if the wire iterator can continue backward.
-  static bool isActive(const WireIterator& it) {
-    return it.operation() == nullptr
-               ? false
-               : !isa<AllocOp, StaticOp, qtensor::ExtractOp>(it.operation());
-  }
+  static bool isActive(const WireIterator& it) { return !it.atWireStart(); }
 };
 
 /**

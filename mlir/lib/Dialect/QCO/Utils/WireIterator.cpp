@@ -10,31 +10,233 @@
 
 #include "mlir/Dialect/QCO/Utils/WireIterator.h"
 
+#include "mlir/Dialect/QCO/IR/QCODialect.h"
 #include "mlir/Dialect/QCO/IR/QCOInterfaces.h"
 #include "mlir/Dialect/QCO/IR/QCOOps.h"
 #include "mlir/Dialect/QTensor/IR/QTensorOps.h"
 
 #include <llvm/ADT/STLExtras.h>
+#include <llvm/ADT/ScopeExit.h>
 #include <llvm/ADT/TypeSwitch.h>
 #include <llvm/Support/ErrorHandling.h>
 #include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/Dialect/SCF/IR/SCF.h>
 #include <mlir/IR/Operation.h>
+#include <mlir/IR/SymbolTable.h>
+#include <mlir/IR/Types.h>
 #include <mlir/IR/Value.h>
 #include <mlir/Support/LLVM.h>
 
 #include <cassert>
+#include <cstddef>
+#include <cstdint>
 #include <iterator>
+#include <optional>
+#include <utility>
 
 namespace mlir::qco {
 
+/// Return the position of @p qubit among the qubit-typed values of @p range, or
+/// `std::nullopt` when it is not one of them.
+template <typename RangeT>
+static std::optional<size_t> qubitPositionIn(RangeT range, Value qubit) {
+  size_t position = 0;
+  for (Value value : range) {
+    if (!isa<QubitType>(value.getType())) {
+      continue;
+    }
+    if (value == qubit) {
+      return position;
+    }
+    ++position;
+  }
+  return std::nullopt;
+}
+
+/// Return the qubit-typed value at position @p position of @p range, or a null
+/// value when the range holds fewer qubits than that.
+template <typename RangeT>
+static Value nthQubitOf(RangeT range, size_t position) {
+  size_t seen = 0;
+  for (Value value : range) {
+    if (!isa<QubitType>(value.getType())) {
+      continue;
+    }
+    if (seen == position) {
+      return value;
+    }
+    ++seen;
+  }
+  return nullptr;
+}
+
+FailureOr<SmallVector<int64_t>>
+CallQubitMapping::computeMapping(func::FuncOp callee) {
+  if (callee.isExternal()) {
+    return failure();
+  }
+
+  /// Threading a callee that is already being threaded would not terminate.
+  if (!inProgress.insert(callee.getOperation()).second) {
+    return failure();
+  }
+  auto progressGuard =
+      llvm::make_scope_exit([&] { inProgress.erase(callee.getOperation()); });
+
+  /// Threading follows one straight-line body. Check for a terminator before
+  /// asking for it because a body under construction does not have one yet.
+  if (!callee.getBody().hasOneBlock() ||
+      !callee.getBody().front().mightHaveTerminator()) {
+    return failure();
+  }
+  auto returnOp =
+      dyn_cast<func::ReturnOp>(callee.getBody().front().getTerminator());
+  if (!returnOp) {
+    return failure();
+  }
+
+  SmallVector<int64_t> mapping;
+  for (BlockArgument arg : callee.getArguments()) {
+    if (!isa<QubitType>(arg.getType())) {
+      continue;
+    }
+
+    int64_t resultIndex = KEPT;
+    {
+      // Follow the argument to the end of its wire. `qubit()` is null on the
+      // terminating operation, so the last non-null value is the one that
+      // operation consumes.
+      Value last = arg;
+      Operation* lastOp = nullptr;
+      WireIterator it(arg, this);
+      for (; it != std::default_sentinel; ++it) {
+        if (Value current = it.qubit()) {
+          last = current;
+        }
+        lastOp = it.operation();
+      }
+      if (it.mappingFailed_) {
+        return failure();
+      }
+
+      if (isa_and_nonnull<func::ReturnOp>(lastOp)) {
+        for (const auto& [index, operand] :
+             llvm::enumerate(returnOp.getOperands())) {
+          if (operand == last) {
+            resultIndex = static_cast<int64_t>(index);
+            break;
+          }
+        }
+      }
+    }
+    mapping.emplace_back(resultIndex);
+  }
+
+  return mapping;
+}
+
+void CallQubitMapping::invalidate() { cache.clear(); }
+
+FailureOr<ArrayRef<int64_t>> CallQubitMapping::mappingFor(func::CallOp callOp) {
+  auto callee = dyn_cast_or_null<func::FuncOp>(
+      SymbolTable::lookupNearestSymbolFrom(callOp, callOp.getCalleeAttr()));
+  if (!callee) {
+    return failure();
+  }
+
+  auto* const key = callee.getOperation();
+  if (const auto it = cache.find(key); it != cache.end()) {
+    return ArrayRef<int64_t>(it->second);
+  }
+  /// Compute first because recursion below may query the same cache.
+  auto mapping = computeMapping(callee);
+  if (failed(mapping)) {
+    return failure();
+  }
+  return ArrayRef<int64_t>(
+      cache.insert_or_assign(key, std::move(*mapping)).first->second);
+}
+
+FailureOr<Value> CallQubitMapping::getResultForOperand(func::CallOp callOp,
+                                                       Value operand) {
+  const auto position = qubitPositionIn(callOp.getOperands(), operand);
+  if (!position) {
+    return Value{};
+  }
+  const auto mappingOr = mappingFor(callOp);
+  if (failed(mappingOr)) {
+    return failure();
+  }
+  const auto mapping = *mappingOr;
+  if (*position >= mapping.size()) {
+    return Value{};
+  }
+  const auto resultIndex = mapping[*position];
+  if (resultIndex == KEPT) {
+    return Value{};
+  }
+  return callOp.getResult(static_cast<unsigned>(resultIndex));
+}
+
+FailureOr<Value> CallQubitMapping::getOperandForResult(func::CallOp callOp,
+                                                       Value result) {
+  const auto opResult = dyn_cast<OpResult>(result);
+  if (!opResult || opResult.getOwner() != callOp.getOperation()) {
+    return Value{};
+  }
+  const auto resultIndex = static_cast<int64_t>(opResult.getResultNumber());
+  const auto mappingOr = mappingFor(callOp);
+  if (failed(mappingOr)) {
+    return failure();
+  }
+  const auto mapping = *mappingOr;
+  for (const auto& [position, index] : llvm::enumerate(mapping)) {
+    if (index == resultIndex) {
+      return nthQubitOf(callOp.getOperands(), position);
+    }
+  }
+  return Value{};
+}
+
 bool WireIterator::isSinkLikeOperation(Operation* op) {
-  return isa<SinkOp, YieldOp, qtensor::InsertOp, scf::ConditionOp, scf::YieldOp,
-             func::ReturnOp>(op);
+  // `qtensor.from_elements` takes qubits into a tensor just like
+  // `qtensor.insert` does, so a wire reaching either of them ends there.
+  return isa<SinkOp, YieldOp, qtensor::InsertOp, qtensor::FromElementsOp,
+             scf::ConditionOp, scf::YieldOp, func::ReturnOp>(op);
 }
 
 bool WireIterator::isSourceLikeOperation(Operation* op) {
   return isa<AllocOp, StaticOp, qtensor::ExtractOp>(op);
+}
+
+FailureOr<Value> WireIterator::resultForOperand(func::CallOp callOp,
+                                                Value operand) const {
+  CallQubitMapping local;
+  auto& mapping = mapping_ == nullptr ? local : *mapping_;
+  return mapping.getResultForOperand(callOp, operand);
+}
+
+Value WireIterator::operandForResult(func::CallOp callOp, Value result) const {
+  CallQubitMapping local;
+  auto& mapping = mapping_ == nullptr ? local : *mapping_;
+  auto operand = mapping.getOperandForResult(callOp, result);
+  return succeeded(operand) ? *operand : Value{};
+}
+
+bool WireIterator::atWireStart() const {
+  if (op_ == nullptr) {
+    return true;
+  }
+  if (isSourceLikeOperation(op_)) {
+    return true;
+  }
+  // A call is the start of the wire only when it creates the qubit rather than
+  // threading one through.
+  if (auto callOp = dyn_cast<func::CallOp>(op_)) {
+    return qubit_.getDefiningOp() == op_ &&
+           operandForResult(callOp, qubit_) == nullptr;
+  }
+  return false;
 }
 
 Value WireIterator::qubit() const {
@@ -63,6 +265,23 @@ void WireIterator::forward() {
 
   if (isSinkLikeOperation(op_)) {
     isFinal_ = true;
+    return;
+  }
+
+  // A call threads the qubit through to the matching result. When the callee
+  // keeps it, the wire ends here.
+  if (auto callOp = dyn_cast<func::CallOp>(op_)) {
+    auto result = resultForOperand(callOp, qubit_);
+    if (failed(result)) {
+      mappingFailed_ = true;
+      isFinal_ = true;
+      return;
+    }
+    if (!*result) {
+      isFinal_ = true;
+      return;
+    }
+    qubit_ = *result;
     return;
   }
 
@@ -121,6 +340,26 @@ void WireIterator::backward() {
   // Source-like ops define the start of the qubit wire.
   // Consequently, stop and early exit.
   if (isSourceLikeOperation(op_)) {
+    return;
+  }
+
+  // A call sits on both sides of a wire: it consumes the caller's qubit and
+  // produces a fresh one.
+  if (auto callOp = dyn_cast<func::CallOp>(op_)) {
+    if (qubit_.getDefiningOp() != op_) {
+      // The wire ended at a call that keeps the qubit, so `qubit_` is one of
+      // its operands and the previous operation defines it.
+      op_ = qubit_.getDefiningOp();
+      isFinal_ = false;
+      return;
+    }
+    const auto operand = operandForResult(callOp, qubit_);
+    if (!operand) {
+      // The callee created the qubit; this is the start of the wire.
+      return;
+    }
+    qubit_ = operand;
+    op_ = qubit_.getDefiningOp();
     return;
   }
 
