@@ -580,7 +580,15 @@ private:
         wires, [&](const Frontier& frontier, ReleasedOps& released) {
           assert(!frontier.empty());
 
-          for (Operation* op : frontier.keys()) {
+          // Because there may be classical dependency chains between the
+          // quantum ops (e.g. a measurement result is used as conditional of a
+          // qco.if), sort the operations in reverse block order first to
+          // process the consumers before the producers.
+
+          SmallVector<Operation*> ops(frontier.keys());
+          sort(ops, [](auto* a, auto* b) { return b->isBeforeInBlock(a); });
+
+          for (Operation* op : ops) {
 
             // If the operation produces classical result chains, make sure to
             // place the operation before (from an IR perspective) the earliest
@@ -610,8 +618,8 @@ private:
             rewriter.moveOpBefore(op, anchor);
             released.emplace_back(op);
 
-            // Because the op is moved before the anchor, the earliest operation
-            // will be *op*. Thus, re-set the anchor.
+            // Moving op before anchor makes op the earliest operation.
+            // Thus, re-set the anchor.
 
             anchor = op;
           }
@@ -1209,6 +1217,9 @@ private:
                     [](auto&) { return Direction == WireDirection::Backward; })
                 .template Case<IfOp, IndexSwitchOp, scf::ForOp, scf::WhileOp>(
                     [&](auto&) {
+                      if (indices.size() == 1) {
+                        return true;
+                      }
                       if (visited.insert(op).second) {
                         composites.emplace_back(op, indices);
                       }
