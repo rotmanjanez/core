@@ -140,7 +140,7 @@ jobs:
 
   python:
     name: 🐍
-    uses: rotmanjanez/workflows/.github/workflows/reusable-python-ci.yml@a7b495851b3d4345342910dd81dfe937f9aa200f # feat/python-version-matrix
+    uses: rotmanjanez/workflows/.github/workflows/reusable-python-ci.yml@4004b755bd158934edc1291d3821161cfcc416af # feat/python-version-matrix
     with:
       compiled: true
       check-stubs: true
