@@ -174,3 +174,5 @@ auto std::hash<dd::CachedEdge<Node>>::operator()(
 template struct std::hash<dd::CachedEdge<dd::vNode>>;
 // NOLINTNEXTLINE(bugprone-std-namespace-modification)
 template struct std::hash<dd::CachedEdge<dd::mNode>>;
+
+// touched to exercise the reusable-cpp-ci.yml umbrella workflow
