@@ -10,6 +10,7 @@
 
 #include "mlir/Dialect/QC/IR/QCOps.h"
 
+#include <mlir/Dialect/Func/IR/FuncOps.h>
 #include <mlir/IR/MLIRContext.h>
 #include <mlir/IR/OperationSupport.h>
 #include <mlir/IR/PatternMatch.h>
@@ -20,28 +21,32 @@ using namespace mlir::qc;
 
 namespace {
 
-/**
- * @brief Remove matching allocation-deallocation pairs.
- */
 struct RemoveAllocDeallocPair final : OpRewritePattern<DeallocOp> {
   using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(DeallocOp op,
                                 PatternRewriter& rewriter) const override {
-    // Get the AllocOp defining the qubit
     auto allocOp = op.getQubit().getDefiningOp<AllocOp>();
-    if (!allocOp) {
+    if (!allocOp || !op.getQubit().hasOneUse()) {
       return failure();
     }
-
-    // Check if the qubit has no other uses
-    if (!op.getQubit().hasOneUse()) {
-      return failure();
-    }
-
-    // Remove the AllocOp and the DeallocOp
     rewriter.eraseOp(op);
     rewriter.eraseOp(allocOp);
+    return success();
+  }
+};
+
+struct HoistStaticQubit final : OpRewritePattern<StaticOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(StaticOp op,
+                                PatternRewriter& rewriter) const override {
+    auto funcOp = op->getParentOfType<func::FuncOp>();
+    if (!funcOp || op->getBlock() == &funcOp.getBody().front()) {
+      return failure();
+    }
+    rewriter.moveOpBefore(op, &funcOp.getBody().front(),
+                          funcOp.getBody().front().begin());
     return success();
   }
 };
@@ -51,4 +56,9 @@ struct RemoveAllocDeallocPair final : OpRewritePattern<DeallocOp> {
 void DeallocOp::getCanonicalizationPatterns(RewritePatternSet& results,
                                             MLIRContext* context) {
   results.add<RemoveAllocDeallocPair>(context);
+}
+
+void StaticOp::getCanonicalizationPatterns(RewritePatternSet& results,
+                                           MLIRContext* context) {
+  results.add<HoistStaticQubit>(context);
 }

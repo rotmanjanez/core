@@ -269,8 +269,10 @@ module {
     scf.if %condition {
       %then0 = qc.static 0 : !qc.qubit
       %then1 = qc.static 1 : !qc.qubit
+      %then2 = qc.static 2 : !qc.qubit
       qc.x %then0 : !qc.qubit
       qc.x %then1 : !qc.qubit
+      qc.x %then2 : !qc.qubit
     } else {
       %else0 = qc.static 0 : !qc.qubit
       %else1 = qc.static 1 : !qc.qubit
@@ -293,9 +295,14 @@ module {
   ASSERT_TRUE(succeeded(verify(*moduleOp)));
   EXPECT_TRUE(succeeded(qco::verifyLinearity(*moduleOp)));
 
+  auto main = moduleOp->lookupSymbol<func::FuncOp>("main");
+  ASSERT_TRUE(main);
   size_t staticOps = 0;
-  moduleOp->walk([&](qco::StaticOp) { ++staticOps; });
-  EXPECT_EQ(staticOps, 2U);
+  moduleOp->walk([&](qco::StaticOp op) {
+    ++staticOps;
+    EXPECT_EQ(op->getBlock(), &main.getBody().front());
+  });
+  EXPECT_EQ(staticOps, 3U);
   expectNoQCOperations(*moduleOp);
 }
 

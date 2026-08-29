@@ -18,8 +18,11 @@
 #include <llvm/ADT/DenseSet.h>
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/TypeSwitch.h>
+#include <mlir/Dialect/Func/IR/FuncOps.h>
+#include <mlir/Dialect/MQT/IR/MQTDialect.h>
 #include <mlir/Dialect/QCO/IR/QCODialect.h>
 #include <mlir/IR/Block.h>
+#include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/Diagnostics.h>
 #include <mlir/IR/Operation.h>
 #include <mlir/IR/Value.h>
@@ -43,9 +46,29 @@ namespace mlir::qco {
 }
 
 LogicalResult verifyLinearity(Operation* root) {
+  func::FuncOp entryPoint;
+  if (auto moduleOp = dyn_cast<ModuleOp>(root)) {
+    for (auto funcOp : moduleOp.getOps<func::FuncOp>()) {
+      if (funcOp->hasAttr(
+              mqt::MQTDialect::EntryPointAttrHelper::getNameStr())) {
+        entryPoint = funcOp;
+        break;
+      }
+    }
+  }
+
   DenseSet<uint64_t> staticIndices;
   const auto walkResult = root->walk([&](Operation* op) {
     if (auto staticOp = dyn_cast<StaticOp>(op)) {
+      if (entryPoint &&
+          (entryPoint.isDeclaration() ||
+           staticOp->getBlock() != &entryPoint.getBody().front())) {
+        staticOp.emitError()
+            << "expected static qubits in the entry block of program entry "
+               "function @"
+            << entryPoint.getSymName();
+        return WalkResult::interrupt();
+      }
       if (!staticIndices.insert(staticOp.getIndex()).second) {
         staticOp.emitError()
             << "expected each static qubit index to identify one linear "
