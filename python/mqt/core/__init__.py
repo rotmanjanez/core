@@ -33,3 +33,5 @@ from ._version import version_tuple as version_info
 from .load import load
 
 __all__ = ["__version__", "load", "version_info"]
+
+# CI smoke test for the reusable-python-ci.yml umbrella workflow.
