@@ -15,12 +15,68 @@ concurrency:
 permissions: {}
 
 jobs:
-  cpp:
-    name: 🇨
-    uses: rotmanjanez/workflows/.github/workflows/reusable-cpp-ci.yml@396397c98df6c7d884c7fd56911c3fdb64d735fb # feat/python-version-matrix
+  change-detection:
+    name: 🔍 Change
+    uses: rotmanjanez/workflows/.github/workflows/reusable-change-detection.yml@ea1ac60d60d768749456ac3b948c006612594fe6 # feat/python-version-matrix
     with:
+      additional-python-files: "mlir/**"
+    permissions:
+      contents: read
+
+  python-lint:
+    name: 🐍 Lint
+    needs: change-detection
+    if: fromJSON(needs.change-detection.outputs.run-python-linter)
+    uses: rotmanjanez/workflows/.github/workflows/reusable-python-linter.yml@ea1ac60d60d768749456ac3b948c006612594fe6 # feat/python-version-matrix
+    with:
+      check-stubs: true
+      enable-ty: true
+      enable-mypy: false
+      setup-mlir: true
+      llvm-version: 22.1.8
+    secrets: inherit
+    permissions:
+      contents: read
+
+  python-build:
+    name: 🐍 Build
+    needs: change-detection
+    if: fromJSON(needs.change-detection.outputs.run-python-tests) || fromJSON(needs.change-detection.outputs.run-cd)
+    uses: rotmanjanez/workflows/.github/workflows/reusable-python-build.yml@ea1ac60d60d768749456ac3b948c006612594fe6 # feat/python-version-matrix
+    with:
+      compiled: true
+      setup-mlir: true
+      llvm-version: 22.1.8
+    secrets: inherit
+    permissions:
+      contents: read
+
+  python-tests:
+    name: 🐍 Test
+    needs: [change-detection, python-lint, python-build]
+    if: >-
+      !cancelled()
+      && fromJSON(needs.change-detection.outputs.run-python-tests)
+      && needs.python-lint.result != 'failure'
+      && needs.python-build.result == 'success'
+    uses: rotmanjanez/workflows/.github/workflows/reusable-python-tests.yml@ea1ac60d60d768749456ac3b948c006612594fe6 # feat/python-version-matrix
+    with:
+      compiled: true
       # the fork is not registered with Codecov; the upload would always fail
       enable-coverage: false
+      setup-mlir: true
+      llvm-version: 22.1.8
+    secrets: inherit
+    permissions:
+      contents: read
+      id-token: write
+
+  cpp-lint:
+    name: 🇨 Lint
+    needs: change-detection
+    if: fromJSON(needs.change-detection.outputs.run-cpp-linter)
+    uses: rotmanjanez/workflows/.github/workflows/reusable-cpp-linter.yml@ea1ac60d60d768749456ac3b948c006612594fe6 # feat/python-version-matrix
+    with:
       clang-version: 22
       build-project: true
       setup-python: true
@@ -31,21 +87,16 @@ jobs:
       cpp-linter-ignore-extra: "vendor/**"
       setup-mlir: true
       llvm-version: 22.1.8
-    secrets: inherit
     permissions:
       contents: read
       pull-requests: write # Needed to post review comments
-      id-token: write
 
-  python:
-    name: 🐍
-    uses: rotmanjanez/workflows/.github/workflows/reusable-python-ci.yml@396397c98df6c7d884c7fd56911c3fdb64d735fb # feat/python-version-matrix
+  cpp-tests:
+    name: 🇨 Test
+    needs: change-detection
+    if: fromJSON(needs.change-detection.outputs.run-cpp-tests)
+    uses: rotmanjanez/workflows/.github/workflows/reusable-cpp-tests.yml@ea1ac60d60d768749456ac3b948c006612594fe6 # feat/python-version-matrix
     with:
-      additional-python-files: "mlir/**"
-      compiled: true
-      check-stubs: true
-      enable-ty: true
-      enable-mypy: false
       # the fork is not registered with Codecov; the upload would always fail
       enable-coverage: false
       setup-mlir: true
@@ -59,7 +110,7 @@ jobs:
   required-checks-pass:
     name: 🚦 Check
     if: always()
-    needs: [cpp, python]
+    needs: [change-detection, python-lint, python-build, python-tests, cpp-lint, cpp-tests]
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any needed job failed or was cancelled
