@@ -15,62 +15,14 @@ concurrency:
 permissions: {}
 
 jobs:
-  change-detection:
-    name: 🔍 Change
-    uses: rotmanjanez/workflows/.github/workflows/reusable-change-detection.yml@1f7563d28bdd5ce1158a8436aeae7b92f37a1d66 # feat/python-version-matrix
+  cpp:
+    name: 🇨
+    uses: rotmanjanez/workflows/.github/workflows/reusable-cpp-ci.yml@396397c98df6c7d884c7fd56911c3fdb64d735fb # feat/python-version-matrix
     with:
-      additional-python-files: "mlir/**"
-    permissions:
-      contents: read
-
-  cpp-tests:
-    name: 🇨 Test
-    needs: change-detection
-    if: fromJSON(needs.change-detection.outputs.run-cpp-tests)
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { runs-on: ubuntu-24.04, compiler: gcc, preset: debug, run-on-draft: true }
-          - { runs-on: ubuntu-24.04-arm, compiler: gcc, preset: release, run-on-draft: false }
-          - { runs-on: macos-26, compiler: clang, preset: release, run-on-draft: false }
-          - { runs-on: macos-26, compiler: clang, preset: debug, run-on-draft: true }
-          - { runs-on: windows-2025, compiler: msvc, preset: debug-windows, run-on-draft: true }
-          - { runs-on: windows-11-arm, compiler: msvc, preset: release-windows, run-on-draft: false }
-    uses: rotmanjanez/workflows/.github/workflows/reusable-cpp-tests.yml@1f7563d28bdd5ce1158a8436aeae7b92f37a1d66 # feat/python-version-matrix
-    with:
-      runs-on: ${{ matrix.runs-on }}
-      compiler: ${{ matrix.compiler }}
-      preset-name: ${{ matrix.preset }}
-      run-on-draft: ${{ matrix.run-on-draft }}
-      setup-mlir: true
-      llvm-version: 22.1.8
-      mlir-debug: ${{ matrix.preset == 'debug-windows' }}
-    secrets: inherit
-    permissions:
-      contents: read
-
-  cpp-coverage:
-    name: 🇨 Coverage
-    needs: change-detection
-    if: fromJSON(needs.change-detection.outputs.run-cpp-tests)
-    uses: rotmanjanez/workflows/.github/workflows/reusable-cpp-coverage.yml@1f7563d28bdd5ce1158a8436aeae7b92f37a1d66 # feat/python-version-matrix
-    with:
-      setup-mlir: true
-      llvm-version: 22.1.8
-    permissions:
-      contents: read
-      id-token: write
-
-  cpp-linter:
-    name: 🇨 Lint
-    needs: change-detection
-    if: fromJSON(needs.change-detection.outputs.run-cpp-linter)
-    uses: rotmanjanez/workflows/.github/workflows/reusable-cpp-linter.yml@1f7563d28bdd5ce1158a8436aeae7b92f37a1d66 # feat/python-version-matrix
-    with:
+      # the fork is not registered with Codecov; the upload would always fail
+      enable-coverage: false
       clang-version: 22
       build-project: true
-      files-changed-only: true
       setup-python: true
       install-pkgs: "nanobind==3.0.0"
       cpp-linter-extra-args: "-std=c++20 -Wunused-template"
@@ -79,14 +31,17 @@ jobs:
       cpp-linter-ignore-extra: "vendor/**"
       setup-mlir: true
       llvm-version: 22.1.8
+    secrets: inherit
     permissions:
       contents: read
       pull-requests: write # Needed to post review comments
+      id-token: write
 
   python:
     name: 🐍
-    uses: rotmanjanez/workflows/.github/workflows/reusable-python-ci.yml@1f7563d28bdd5ce1158a8436aeae7b92f37a1d66 # feat/python-version-matrix
+    uses: rotmanjanez/workflows/.github/workflows/reusable-python-ci.yml@396397c98df6c7d884c7fd56911c3fdb64d735fb # feat/python-version-matrix
     with:
+      additional-python-files: "mlir/**"
       compiled: true
       check-stubs: true
       enable-ty: true
@@ -104,28 +59,11 @@ jobs:
   required-checks-pass:
     name: 🚦 Check
     if: always()
-    needs:
-      - change-detection
-      - cpp-tests
-      - cpp-coverage
-      - cpp-linter
-      - python
+    needs: [cpp, python]
     runs-on: ubuntu-latest
     steps:
-      - name: Decide whether the needed jobs succeeded or failed
-        uses: re-actors/alls-green@b5b5b37504aa4183270bd3d855c52a67f212be35 # v1.3.0
-        with:
-          allowed-skips: >-
-            ${{
-              !fromJSON(needs.change-detection.outputs.run-cpp-tests)
-              && 'cpp-tests-ubuntu,cpp-tests-macos,cpp-tests-windows,' || ''
-            }}
-            ${{
-              !fromJSON(needs.change-detection.outputs.run-cpp-tests)
-              && 'cpp-coverage,' || ''
-            }}
-            ${{
-              !fromJSON(needs.change-detection.outputs.run-cpp-linter)
-              && 'cpp-linter' || ''
-            }}
-          jobs: ${{ toJSON(needs) }}
+      - name: Fail if any needed job failed or was cancelled
+        if: >-
+          ${{ contains(needs.*.result, 'failure')
+          || contains(needs.*.result, 'cancelled') }}
+        run: exit 1
