@@ -133,6 +133,10 @@ git-only = [
 ]
 
 [tool.scikit-build.cmake.define]
+# The project has no C++20 modules, but CMake still emits a scan and a dyndep edge for every
+# translation unit. Those invocations carry `-fmodules-ts`, which no compiler cache will cache,
+# so they are pure, unavoidable rebuild cost on every wheel build.
+CMAKE_CXX_SCAN_FOR_MODULES = "OFF"
 BUILD_MQT_CORE_BINDINGS = "ON"
 BUILD_MQT_CORE_TESTS = "OFF"
 BUILD_MQT_CORE_SHARED_LIBS = "ON"
