@@ -17,7 +17,7 @@ permissions: {}
 jobs:
   change-detection:
     name: 🔍 Change
-    uses: rotmanjanez/workflows/.github/workflows/reusable-change-detection.yml@4039a0f9f1bd2269fd194fd4e92b1ec6b8aae664 # feat/python-version-matrix
+    uses: rotmanjanez/workflows/.github/workflows/reusable-change-detection.yml@ffbaa2486b271b2fc4ea09955045654add745b96 # feat/python-version-matrix
     with:
       additional-python-files: "mlir/**"
     permissions:
@@ -27,7 +27,7 @@ jobs:
     name: 🐍 Lint
     needs: change-detection
     if: fromJSON(needs.change-detection.outputs.run-python-linter)
-    uses: rotmanjanez/workflows/.github/workflows/reusable-python-linter.yml@4039a0f9f1bd2269fd194fd4e92b1ec6b8aae664 # feat/python-version-matrix
+    uses: rotmanjanez/workflows/.github/workflows/reusable-python-linter.yml@ffbaa2486b271b2fc4ea09955045654add745b96 # feat/python-version-matrix
     with:
       check-stubs: true
       enable-ty: true
@@ -42,7 +42,7 @@ jobs:
     name: 🐍 Build
     needs: change-detection
     if: fromJSON(needs.change-detection.outputs.run-python-tests) || fromJSON(needs.change-detection.outputs.run-cd)
-    uses: rotmanjanez/workflows/.github/workflows/reusable-python-build.yml@4039a0f9f1bd2269fd194fd4e92b1ec6b8aae664 # feat/python-version-matrix
+    uses: rotmanjanez/workflows/.github/workflows/reusable-python-build.yml@ffbaa2486b271b2fc4ea09955045654add745b96 # feat/python-version-matrix
     with:
       compiled: true
       setup-mlir: true
@@ -59,7 +59,7 @@ jobs:
       && fromJSON(needs.change-detection.outputs.run-python-tests)
       && needs.python-lint.result != 'failure'
       && needs.python-build.result == 'success'
-    uses: rotmanjanez/workflows/.github/workflows/reusable-python-tests.yml@4039a0f9f1bd2269fd194fd4e92b1ec6b8aae664 # feat/python-version-matrix
+    uses: rotmanjanez/workflows/.github/workflows/reusable-python-tests.yml@ffbaa2486b271b2fc4ea09955045654add745b96 # feat/python-version-matrix
     with:
       compiled: true
       # the fork is not registered with Codecov; the upload would always fail
@@ -75,7 +75,7 @@ jobs:
     name: 🇨 Lint
     needs: change-detection
     if: fromJSON(needs.change-detection.outputs.run-cpp-linter)
-    uses: rotmanjanez/workflows/.github/workflows/reusable-cpp-linter.yml@4039a0f9f1bd2269fd194fd4e92b1ec6b8aae664 # feat/python-version-matrix
+    uses: rotmanjanez/workflows/.github/workflows/reusable-cpp-linter.yml@ffbaa2486b271b2fc4ea09955045654add745b96 # feat/python-version-matrix
     with:
       clang-version: 22
       build-project: true
@@ -95,7 +95,7 @@ jobs:
     name: 🇨 Test
     needs: change-detection
     if: fromJSON(needs.change-detection.outputs.run-cpp-tests)
-    uses: rotmanjanez/workflows/.github/workflows/reusable-cpp-tests.yml@4039a0f9f1bd2269fd194fd4e92b1ec6b8aae664 # feat/python-version-matrix
+    uses: rotmanjanez/workflows/.github/workflows/reusable-cpp-tests.yml@ffbaa2486b271b2fc4ea09955045654add745b96 # feat/python-version-matrix
     with:
       # the fork is not registered with Codecov; the upload would always fail
       enable-coverage: false
