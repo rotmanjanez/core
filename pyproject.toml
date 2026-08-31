@@ -288,8 +288,13 @@ test-sources = [
 test-command = "pytest test/python"
 build-frontend = "uv"
 
+# The wheel is abi3, so cp312 and later build nothing -- they reinstall the test dependencies and
+# run the whole suite again against a byte-identical binary. On Windows each such pass also pulls a
+# fresh interpreter from NuGet, which is about 180s of the wheel job. The interpreter matrix is
+# covered by the test workflow, which installs these wheels from the build artifacts, so all that is
+# wanted here is a smoke test proving the repaired wheel imports.
 [[tool.cibuildwheel.overrides]]
-select = ["cp*-win_arm64", "cp315*"]
+select = ["cp*-win_arm64", "cp312*", "cp313*", "cp314*", "cp315*"]
 before-test = ""
 test-groups = []
 test-sources = []
