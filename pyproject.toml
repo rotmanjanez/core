@@ -133,6 +133,10 @@ git-only = [
 ]
 
 [tool.scikit-build.cmake.define]
+# The project has no C++20 modules, but CMake still emits a scan and a dyndep edge for every
+# translation unit. Those invocations carry `-fmodules-ts`, which no compiler cache will cache,
+# so they are pure, unavoidable rebuild cost on every wheel build.
+CMAKE_CXX_SCAN_FOR_MODULES = "OFF"
 BUILD_MQT_CORE_BINDINGS = "ON"
 BUILD_MQT_CORE_TESTS = "OFF"
 BUILD_MQT_CORE_SHARED_LIBS = "ON"
@@ -284,8 +288,13 @@ test-sources = [
 test-command = "pytest test/python"
 build-frontend = "uv"
 
+# The wheel is abi3, so cp312 and later build nothing -- they reinstall the test dependencies and
+# run the whole suite again against a byte-identical binary. On Windows each such pass also pulls a
+# fresh interpreter from NuGet, which is about 180s of the wheel job. The interpreter matrix is
+# covered by the test workflow, which installs these wheels from the build artifacts, so all that is
+# wanted here is a smoke test proving the repaired wheel imports.
 [[tool.cibuildwheel.overrides]]
-select = ["cp*-win_arm64", "cp315*"]
+select = ["cp*-win_arm64", "cp312*", "cp313*", "cp314*", "cp315*"]
 before-test = ""
 test-groups = []
 test-sources = []

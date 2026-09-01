@@ -7,7 +7,8 @@
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
         "MLIR_DIR": "$env{MLIR_DIR}",
-        "CMAKE_UNITY_BUILD": "ON"
+        "CMAKE_UNITY_BUILD": "ON",
+        "CMAKE_CXX_SCAN_FOR_MODULES": "OFF"
       }
     },
     {
