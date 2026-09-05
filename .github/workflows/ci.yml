@@ -23,6 +23,54 @@ jobs:
     permissions:
       contents: read
 
+  python-build:
+    name: 🐍 Build
+    needs: change-detection
+    if: fromJSON(needs.change-detection.outputs.run-python-tests) || fromJSON(needs.change-detection.outputs.run-cd)
+    uses: rotmanjanez/workflows/.github/workflows/reusable-python-build.yml@ce761ae89aa182c12a9759bec4e574d968944368 # feat/python-version-matrix
+    with:
+      compiled: true
+      setup-mlir: true
+      llvm-version: 22.1.8
+    secrets: inherit
+    permissions:
+      contents: read
+
+  python-tests:
+    name: 🐍 Test
+    needs: [change-detection, python-lint, python-build]
+    if: >-
+      !cancelled()
+      && fromJSON(needs.change-detection.outputs.run-python-tests)
+      && needs.python-lint.result != 'failure'
+      && needs.python-build.result == 'success'
+    uses: rotmanjanez/workflows/.github/workflows/reusable-python-tests.yml@ce761ae89aa182c12a9759bec4e574d968944368 # feat/python-version-matrix
+    with:
+      compiled: true
+      # the fork is not registered with Codecov; the upload would always fail
+      enable-coverage: false
+      setup-mlir: true
+      llvm-version: 22.1.8
+    secrets: inherit
+    permissions:
+      contents: read
+      id-token: write
+
+  cpp-tests:
+    name: 🇨 Test
+    needs: change-detection
+    if: fromJSON(needs.change-detection.outputs.run-cpp-tests)
+    uses: rotmanjanez/workflows/.github/workflows/reusable-cpp-tests.yml@ce761ae89aa182c12a9759bec4e574d968944368 # feat/python-version-matrix
+    with:
+      # the fork is not registered with Codecov; the upload would always fail
+      enable-coverage: false
+      setup-mlir: true
+      llvm-version: 22.1.8
+    secrets: inherit
+    permissions:
+      contents: read
+      id-token: write
+
   python-lint:
     name: 🐍 Lint
     needs: change-detection
@@ -32,19 +80,6 @@ jobs:
       check-stubs: true
       enable-ty: true
       enable-mypy: false
-      setup-mlir: true
-      llvm-version: 22.1.8
-    secrets: inherit
-    permissions:
-      contents: read
-
-  python-build:
-    name: 🐍 Build
-    needs: change-detection
-    if: fromJSON(needs.change-detection.outputs.run-python-tests) || fromJSON(needs.change-detection.outputs.run-cd)
-    uses: rotmanjanez/workflows/.github/workflows/reusable-python-build.yml@ce761ae89aa182c12a9759bec4e574d968944368 # feat/python-version-matrix
-    with:
-      compiled: true
       setup-mlir: true
       llvm-version: 22.1.8
     secrets: inherit
@@ -71,46 +106,19 @@ jobs:
       contents: read
       pull-requests: write # Needed to post review comments
 
-  cpp-tests:
-    name: 🇨 Test
-    needs: change-detection
-    if: fromJSON(needs.change-detection.outputs.run-cpp-tests)
-    uses: rotmanjanez/workflows/.github/workflows/reusable-cpp-tests.yml@ce761ae89aa182c12a9759bec4e574d968944368 # feat/python-version-matrix
-    with:
-      # the fork is not registered with Codecov; the upload would always fail
-      enable-coverage: false
-      setup-mlir: true
-      llvm-version: 22.1.8
-    secrets: inherit
-    permissions:
-      contents: read
-      id-token: write
-
-  python-tests:
-    name: 🐍 Test
-    needs: [change-detection, python-lint, python-build]
-    if: >-
-      !cancelled()
-      && fromJSON(needs.change-detection.outputs.run-python-tests)
-      && needs.python-lint.result != 'failure'
-      && needs.python-build.result == 'success'
-    uses: rotmanjanez/workflows/.github/workflows/reusable-python-tests.yml@ce761ae89aa182c12a9759bec4e574d968944368 # feat/python-version-matrix
-    with:
-      compiled: true
-      # the fork is not registered with Codecov; the upload would always fail
-      enable-coverage: false
-      setup-mlir: true
-      llvm-version: 22.1.8
-    secrets: inherit
-    permissions:
-      contents: read
-      id-token: write
-
   # this job does nothing and is only used for branch protection
   required-checks-pass:
     name: 🚦 Check
     if: always()
-    needs: [change-detection, python-lint, python-build, python-tests, cpp-lint, cpp-tests]
+    needs:
+      [
+        change-detection,
+        python-build,
+        python-tests,
+        cpp-tests,
+        python-lint,
+        cpp-lint,
+      ]
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any needed job failed or was cancelled
