@@ -130,10 +130,16 @@ def _run_tests(
     pytest_run_args: Sequence[str] = (),
 ) -> None:
     env = {"UV_PROJECT_ENVIRONMENT": session.virtualenv.location}
-    if shutil.which("cmake") is None:
-        session.install("cmake")
-    if shutil.which("ninja") is None:
-        session.install("ninja")
+    # CI sets `MQT_WHEELHOUSE` to a directory of prebuilt wheels, along with
+    # `UV_FIND_LINKS` and a `UV_CONSTRAINT` pinning the exact version in it.
+    # Since `uv sync` always installs the root project from the local tree, the
+    # project must be excluded from the sync and installed separately.
+    wheelhouse = os.environ.get("MQT_WHEELHOUSE")
+    if not wheelhouse:
+        if shutil.which("cmake") is None:
+            session.install("cmake")
+        if shutil.which("ninja") is None:
+            session.install("ninja")
 
     # install build and test dependencies on top of the existing environment
     session.run(
@@ -144,19 +150,40 @@ def _run_tests(
         "build",
         "--only-group",
         "test",
+        "--no-install-project",  # install the project once on the selected path below
         *install_args,
         env=env,
     )
-    session.run(
-        "uv",
-        "sync",
-        "--inexact",
-        "--no-dev",  # do not auto-install dev dependencies
-        "--no-build-isolation-package",
-        "mqt-core",  # build the project without isolation
-        *install_args,
-        env=env,
-    )
+    if wheelhouse:
+        session.run(
+            "uv",
+            "sync",
+            "--inexact",
+            "--no-dev",
+            "--no-install-project",  # the wheel below provides it
+            *install_args,
+            env=env,
+        )
+        session.run(
+            "uv",
+            "pip",
+            "install",
+            "--python",
+            session.virtualenv.location,
+            "mqt-core",
+            env=env,
+        )
+    else:
+        session.run(
+            "uv",
+            "sync",
+            "--inexact",
+            "--no-dev",  # do not auto-install dev dependencies
+            "--no-build-isolation-package",
+            "mqt-core",  # build the project without isolation
+            *install_args,
+            env=env,
+        )
     if extra_command:
         session.run(*extra_command, env=env)
     session.run(
