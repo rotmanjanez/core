@@ -51,26 +51,6 @@ jobs:
     permissions:
       contents: read
 
-  python-tests:
-    name: 🐍 Test
-    needs: [change-detection, python-lint, python-build]
-    if: >-
-      !cancelled()
-      && fromJSON(needs.change-detection.outputs.run-python-tests)
-      && needs.python-lint.result != 'failure'
-      && needs.python-build.result == 'success'
-    uses: rotmanjanez/workflows/.github/workflows/reusable-python-tests.yml@ce761ae89aa182c12a9759bec4e574d968944368 # feat/python-version-matrix
-    with:
-      compiled: true
-      # the fork is not registered with Codecov; the upload would always fail
-      enable-coverage: false
-      setup-mlir: true
-      llvm-version: 22.1.8
-    secrets: inherit
-    permissions:
-      contents: read
-      id-token: write
-
   cpp-lint:
     name: 🇨 Lint
     needs: change-detection
@@ -97,6 +77,26 @@ jobs:
     if: fromJSON(needs.change-detection.outputs.run-cpp-tests)
     uses: rotmanjanez/workflows/.github/workflows/reusable-cpp-tests.yml@ce761ae89aa182c12a9759bec4e574d968944368 # feat/python-version-matrix
     with:
+      # the fork is not registered with Codecov; the upload would always fail
+      enable-coverage: false
+      setup-mlir: true
+      llvm-version: 22.1.8
+    secrets: inherit
+    permissions:
+      contents: read
+      id-token: write
+
+  python-tests:
+    name: 🐍 Test
+    needs: [change-detection, python-lint, python-build]
+    if: >-
+      !cancelled()
+      && fromJSON(needs.change-detection.outputs.run-python-tests)
+      && needs.python-lint.result != 'failure'
+      && needs.python-build.result == 'success'
+    uses: rotmanjanez/workflows/.github/workflows/reusable-python-tests.yml@ce761ae89aa182c12a9759bec4e574d968944368 # feat/python-version-matrix
+    with:
+      compiled: true
       # the fork is not registered with Codecov; the upload would always fail
       enable-coverage: false
       setup-mlir: true
